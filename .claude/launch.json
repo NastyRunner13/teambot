@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "teambot-server",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@teambot/server", "dev"],
+      "port": 8787
+    },
+    {
+      "name": "teambot-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@teambot/web", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "teambot-verify",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@teambot/server", "dev"],
+      "port": 8788,
+      "env": {
+        "PORT": "8788",
+        "TEAMBOT_DATA_DIR": "C:/Users/princ/AppData/Local/Temp/claude/C--Users-princ-OneDrive-Desktop-AI-Agents-teambot/5d1093fe-eb01-4c7c-9d6f-c6fb5ec990a7/scratchpad/verify-data",
+        "TEAMBOT_OFFLINE_MODELS": "1",
+        "TEAMBOT_USER_NAME": "Tester"
+      }
+    }
+  ]
+}

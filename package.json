@@ -1,0 +1,20 @@
+{
+  "name": "teambot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An open-source office for AI agents: every agent gets its own computer and model, works with the team in channels and on a task board, and can't act without passing your rules.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@10.30.2",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @teambot/server --filter @teambot/web dev",
+    "build": "pnpm --filter @teambot/web build",
+    "start": "pnpm --filter @teambot/server start",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "computer:build": "docker build -t teambot/computer:latest computer"
+  }
+}

@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+data
+.env
+.git
+.claude
+docs
+computer/Dockerfile
+computer/*.sh
+computer/*.conf
+computer/computerd/src

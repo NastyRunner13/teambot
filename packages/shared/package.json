@@ -1,0 +1,11 @@
+{
+  "name": "@teambot/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Types shared by the TeamBot server and web app.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts"
+}
