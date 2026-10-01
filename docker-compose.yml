@@ -1,0 +1,43 @@
+# Self-host TeamBot with Docker:
+#   docker build -t teambot/computer:latest ./computer   # the agent computer image (once, and after updates)
+#   docker compose up -d --build                         # then open http://127.0.0.1:8787
+#
+# The server talks to Docker through the socket to start one computer per agent. That makes it
+# privileged on this host: only run TeamBot on machines you control, and keep the port on 127.0.0.1
+# unless you put an authenticating proxy in front of it.
+name: teambot
+
+services:
+  teambot:
+    build: .
+    image: teambot/server:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TEAMBOT_PORT:-8787}:8787"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8787"
+      TEAMBOT_DATA_DIR: /data
+      # Computers join this network; the server reaches them by container name (no published ports).
+      TEAMBOT_COMPUTER_NETWORK: teambot
+      # /shared is a named volume mounted in the server and in every computer.
+      TEAMBOT_SHARED_VOLUME: teambot-shared
+    volumes:
+      - teambot-data:/data
+      - teambot-shared:/data/shared
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - teambot
+
+networks:
+  teambot:
+    name: teambot
+
+volumes:
+  teambot-data:
+    name: teambot-data
+  teambot-shared:
+    name: teambot-shared
