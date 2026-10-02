@@ -8,3 +8,4 @@ coverage/
 .vite/
 mcp.json
 .claude/worktrees/
+.pnpm-store
