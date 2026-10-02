@@ -119,6 +119,32 @@ describe('attachments', () => {
     expect(res.json().attachments[0].name).toBe('notes.txt');
     await server.close();
   });
+
+  it('tells agents reading history which files mentioned there are gone', async () => {
+    const { app, models, owner } = setup();
+    fs.mkdirSync(path.join(app.cfg.sharedDir, 'research'), { recursive: true });
+    fs.writeFileSync(path.join(app.cfg.sharedDir, 'research/kept.md'), '# Kept');
+    addAgent(app, 'Writer');
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: 'Reports: /shared/research/kept.md and /shared/research/gone.md.', route: false });
+    app.workspace.createTask({ title: 'Old report', description: 'Saved at /shared/research/gone.md' }, humanActor(owner.id));
+    models.script('test/writer', [
+      callTool('read_channel', { channel: '#general' }),
+      callTool('list_tasks', { status: 'all' }),
+      callTool('search_history', { query: 'reports' }),
+      say('[silent]'),
+    ]);
+
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Writer where are the reports?' });
+    await app.runtime.idle();
+
+    const results = models.requests.at(-1)!.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+    expect(results).toHaveLength(3);
+    for (const result of results) {
+      expect(result).toContain('/shared/research/gone.md (not found — deleted or moved)');
+      expect(result).not.toContain('kept.md (not found');
+    }
+    expect(results[0]).toContain('/shared/research/kept.md and');
+  });
 });
 
 describe('deleting tasks', () => {

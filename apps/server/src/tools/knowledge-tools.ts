@@ -1,6 +1,7 @@
 // What the team knows: skills (written procedures), long-term memory, and search over past work.
 import { z } from 'zod';
 import { search } from '../search.js';
+import { markMissingFiles } from '../shared-files.js';
 import { parseSkill } from '../skills.js';
 import { defineTool, type ToolDef } from './types.js';
 
@@ -83,7 +84,7 @@ export function knowledgeTools(): ToolDef[] {
           ...r.messages.map((h) => `[${h.message.createdAt.slice(0, 16).replace('T', ' ')}] ${h.where} — ${ws.memberName(h.message.authorId)}: ${h.snippet}`),
           ...r.tasks.map((h) => `Task ${ws.taskLine(h.task)}\n    ${h.snippet}`),
         ];
-        return `Results for "${a.query}" (newest first):\n${lines.join('\n')}`;
+        return markMissingFiles(ctx.app.cfg.sharedDir, `Results for "${a.query}" (newest first):\n${lines.join('\n')}`);
       },
     }),
   ];

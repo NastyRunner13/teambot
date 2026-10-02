@@ -1,6 +1,7 @@
 // Team tools: talking to people and agents, and working the task board.
 import { z } from 'zod';
 import { TASK_STATUSES, type TaskStatus } from '@teambot/shared';
+import { markMissingFiles } from '../shared-files.js';
 import type { Actor } from '../workspace.js';
 import { defineTool, type ToolContext, type ToolDef } from './types.js';
 
@@ -81,10 +82,11 @@ export function workspaceTools(): ToolDef[] {
         }
         const messages = ctx.app.store.listMessages(channel.id, { limit: a.limit ?? 20 });
         if (!messages.length) return `${ws.channelLabel(channel, ctx.agent.id)} has no messages yet.`;
-        return [
+        const lines = [
           `Last ${messages.length} messages in ${ws.channelLabel(channel, ctx.agent.id)} (oldest first):`,
           ...messages.map((m) => `[${m.createdAt.slice(0, 16).replace('T', ' ')}] ${ws.memberName(m.authorId)}${m.threadId ? ' (thread reply)' : ''}: ${ws.messageBody(m)}`),
-        ].join('\n');
+        ];
+        return markMissingFiles(ctx.app.cfg.sharedDir, lines.join('\n'));
       },
     }),
 
@@ -94,7 +96,10 @@ export function workspaceTools(): ToolDef[] {
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({
-        status: z.enum(['open', 'all', ...TASK_STATUSES] as [string, ...string[]]).optional().describe('"open" (default) = not done or cancelled'),
+        status: z
+          .enum(['open', 'all', ...TASK_STATUSES] as [string, ...string[]])
+          .optional()
+          .describe('"open" (default) = not done or cancelled. Finished tasks are history: ask for them only when someone asks about past work.'),
         assignee: z.string().optional().describe('"me", a teammate name, or omit for everyone'),
       }),
       async execute(a, ctx) {
@@ -108,12 +113,13 @@ export function workspaceTools(): ToolDef[] {
           return true;
         });
         if (!tasks.length) return 'No matching tasks.';
-        return tasks
+        const list = tasks
           .map((t) => {
             const last = t.notes.at(-1);
             return ws.taskLine(t) + (t.description ? `\n    ${t.description.slice(0, 300)}` : '') + (last ? `\n    latest note (${ws.memberName(last.authorId)}): ${last.text.slice(0, 300)}` : '');
           })
           .join('\n');
+        return markMissingFiles(ctx.app.cfg.sharedDir, list);
       },
     }),
 

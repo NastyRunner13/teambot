@@ -85,6 +85,25 @@ export function attachmentFor(sharedDir: string, ref: string): Attachment {
   return { path: toSharedRef(sharedDir, full), name: path.basename(full), size: st.size };
 }
 
+const SHARED_REF = /\/shared\/[^\s`'"<>()[\]{}*,;|]+/g;
+
+/**
+ * Mark every /shared path in old text (messages, task notes) that no longer exists, so an agent reading
+ * history doesn't send someone to a file that was deleted since.
+ */
+export function markMissingFiles(sharedDir: string, text: string): string {
+  return text.replace(SHARED_REF, (match) => {
+    const ref = match.replace(/[.:!?]+$/, ''); // sentence punctuation after the path
+    let exists = false;
+    try {
+      exists = !!realSharedPath(sharedDir, ref);
+    } catch {
+      // It leads outside /shared: not a file anyone can use.
+    }
+    return exists ? match : `${ref} (not found — deleted or moved)${match.slice(ref.length)}`;
+  });
+}
+
 /** Make a file name safe and readable: no folders, no control characters, nothing hidden. */
 export function cleanFileName(name: string): string {
   const base = path.basename(name.replace(/\\/g, '/')).replace(/[\u0000-\u001f<>:"|?*]/g, '_').trim();
