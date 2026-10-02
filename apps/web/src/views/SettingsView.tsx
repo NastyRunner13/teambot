@@ -1,12 +1,9 @@
-// Settings: your name, system health, the team, connectors, chat bridges, secrets and the action policy.
+// Settings: your name, system health, the team, spending, secrets and the action policy. Apps live in Connect apps.
 import { CheckCircle2, KeyRound, Trash2, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { SpendReport } from '@teambot/shared';
 import { api } from '../api';
-import { ConnectorSettings } from '../components/ConnectorSettings';
-import { SlackSettings } from '../components/SlackSettings';
 import { TeamSettings } from '../components/TeamSettings';
-import { TelegramSettings } from '../components/TelegramSettings';
 import { money } from '../lib/format';
 import { useStore } from '../store';
 
@@ -101,7 +98,7 @@ function Spending() {
     <div className="section">
       <h2>Spending</h2>
       <p className="muted small">
-        Model costs as reported by OpenRouter, in UTC days and months. Set caps per agent in its Customize tab; the workspace cap stops every agent once the team's total for
+        Model costs as reported by OpenRouter, in UTC days and months. Set caps per agent on its Customize page; the workspace cap stops every agent once the team's total for
         the day reaches it.
       </p>
       <div className="list" style={{ marginBottom: 12 }}>
@@ -113,7 +110,7 @@ function Spending() {
         {agents.map((a) => (
           <div key={a.id} className="list-row">
             <span className="grow ellipsis">
-              {a.avatar} {a.name}
+              {a.name}
               {(a.budget.dailyUsd || a.budget.monthlyUsd || a.budget.dailyTokens) && <span className="small faint"> · capped</span>}
             </span>
             <span className="spend-col mono small">{money(report.agents[a.id]?.today.usd ?? 0)}</span>
@@ -172,7 +169,7 @@ function PolicyEditor() {
       <h2>Action policy</h2>
       <p className="muted small">
         Every tool call is checked against these rules before it runs: <strong>allow</strong>, <strong>review</strong> (a reviewer model decides, and asks you when unsure),{' '}
-        <strong>ask</strong> (wait in Approvals), <strong>handoff</strong> (a human does the step) or <strong>deny</strong>. The strictest matching rule wins.
+        <strong>ask</strong> (wait for you in the chat), <strong>handoff</strong> (a human does the step) or <strong>deny</strong>. The strictest matching rule wins.
       </p>
       <textarea className="textarea code" spellCheck={false} value={yaml} onChange={(e) => setYaml(e.target.value)} />
       {error && <div className="error-text" style={{ marginTop: 6 }}>{error}</div>}
@@ -261,11 +258,6 @@ export function SettingsView() {
                   </span>
                 </div>
               )}
-              {health.mcpServers
-                .filter((s) => s.source === 'file')
-                .map((s) => (
-                  <Check key={s.name} ok={s.connected} label={`MCP server "${s.name}" from mcp.json (${s.tools} tools)`} fix={s.error} />
-                ))}
             </div>
           )}
         </div>
@@ -274,10 +266,7 @@ export function SettingsView() {
         {/* Members can read these; only owners change them (the server enforces it too). */}
         <fieldset className="owner-only" disabled={!canManage}>
           {!canManage && <p className="small muted owner-note">Only the workspace owners can change the settings below.</p>}
-          <ConnectorSettings />
           <Spending />
-          <TelegramSettings />
-          <SlackSettings />
           <Secrets />
           <PolicyEditor />
         </fieldset>

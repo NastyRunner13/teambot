@@ -1,90 +1,35 @@
-import { Activity, BookOpen, Bot, FolderOpen, Hash, KanbanSquare, Monitor, Moon, Pause, Play, Plus, Search, Settings, ShieldAlert, Sun } from 'lucide-react';
-import { Fragment, useEffect, useState } from 'react';
+// The conversation list: every agent and group chat, newest first, with your profile and the apps hub below.
+import { BookOpen, FolderOpen, LogOut, Monitor, Moon, PanelLeft, Pause, Play, Plug, Plus, Search, Settings, Sun } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api } from '../api';
-import { useStore } from '../store';
-import { NewAgentDialog } from '../views/AgentForm';
-import { Avatar } from './Avatar';
-import { Modal } from './Modal';
+import { previewOf, useConversations } from '../lib/conversations';
+import { memberName, useStore } from '../store';
+import { Avatar, GroupAvatar } from './Avatar';
+import { MenuButton, MenuItem, MenuLabel, MenuSeparator } from './Menu';
 
-function NewChannelDialog({ onClose }: { onClose: () => void }) {
-  const agents = useStore((s) => s.agents);
-  const [, navigate] = useLocation();
-  const [name, setName] = useState('');
-  const [topic, setTopic] = useState('');
-  const [members, setMembers] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+type Theme = 'dark' | 'light' | 'system';
 
-  async function create() {
-    try {
-      const ch = await api.post<{ id: string }>('/channels', { name, topic, memberIds: members });
-      onClose();
-      navigate(`/c/${ch.id}`);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
-  return (
-    <Modal
-      title="New channel" aria-label="New channel"
-      onClose={onClose}
-      footer={
-        <>
-          {error && <span className="error-text grow">{error}</span>}
-          <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn primary" disabled={!name} onClick={create}>
-            Create
-          </button>
-        </>
-      }
-    >
-      <div className="field">
-        <label>Name</label>
-        <input className="input" data-autofocus placeholder="launch" value={name} onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-'))} />
-      </div>
-      <div className="field">
-        <label>Topic</label>
-        <input className="input" placeholder="What this channel is for" value={topic} onChange={(e) => setTopic(e.target.value)} />
-      </div>
-      {agents.length > 0 && (
-        <div className="field">
-          <label>Agents</label>
-          <div className="row wrap">
-            {agents.map((a) => (
-              <label key={a.id} className="row small" style={{ gap: 6 }}>
-                <input type="checkbox" checked={members.includes(a.id)} onChange={(e) => setMembers(e.target.checked ? [...members, a.id] : members.filter((m) => m !== a.id))} />
-                {a.avatar} {a.name}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-export function Sidebar() {
-  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'system');
+function useTheme(): [Theme, (t: Theme) => void] {
+  const [theme, setTheme] = useState<Theme>(() => (document.documentElement.dataset.theme as Theme) || 'dark');
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem('teambot-theme', theme); } catch { /* Theme still works when storage is disabled. */ }
+    try {
+      localStorage.setItem('teambot-theme', theme);
+    } catch {
+      /* Theme still works when storage is disabled. */
+    }
   }, [theme]);
-  const [location] = useLocation();
-  const channels = useStore((s) => s.channels);
-  const agents = useStore((s) => s.agents);
-  const approvals = useStore((s) => s.approvals.length);
-  const openTasks = useStore((s) => s.tasks.filter((t) => t.status === 'todo' || t.status === 'in_progress' || t.status === 'blocked').length);
-  const pausedAll = useStore((s) => s.pausedAll);
-  const connected = useStore((s) => s.connected);
-  const notify = useStore((s) => s.notify);
-  const teamMode = useStore((s) => s.teamMode);
-  const [newAgent, setNewAgent] = useState(false);
-  const [newChannel, setNewChannel] = useState(false);
+  return [theme, setTheme];
+}
 
-  const is = (path: string) => location === path || location.startsWith(`${path}/`) || location.startsWith(`${path}?`);
+function ProfileMenu() {
+  const me = useStore((s) => s.me);
+  const teamMode = useStore((s) => s.teamMode);
+  const pausedAll = useStore((s) => s.pausedAll);
+  const notify = useStore((s) => s.notify);
+  const [, navigate] = useLocation();
+  const [theme, setTheme] = useTheme();
 
   async function togglePauseAll() {
     try {
@@ -95,101 +40,110 @@ export function Sidebar() {
     }
   }
 
-  return (
-    <nav className="sidebar" id="workspace-navigation" aria-label="Workspace">
-      <div className="brand">
-        <div className="logo"><Bot size={21} strokeWidth={1.7} /></div>
-        <div>TeamBot<div className="brand-caption">{teamMode ? 'Team workspace' : 'Personal workspace'}</div></div>
-        <span className={`conn ${connected ? '' : 'off'}`} title={connected ? 'Live' : 'Reconnecting…'} />
-      </div>
-      <div className="sidebar-scroll">
-        <button className="btn primary new-agent" onClick={() => setNewAgent(true)}><Plus size={16} /> New agent</button>
-        <div className="side-group">
-          <div className="side-label">
-            Your agents <span className="roster-count">{agents.filter((a) => !a.parentId).length}</span>
-            <button onClick={() => setNewAgent(true)} title="Add an agent" aria-label="Add an agent">
-              <Plus size={14} />
-            </button>
-          </div>
-          {agents
-            .filter((a) => !a.parentId)
-            .map((a) => (
-              <Fragment key={a.id}>
-                <Link href={`/agents/${a.id}`} className={`side-item ${is(`/agents/${a.id}`) ? 'active' : ''}`}>
-                  <Avatar member={a} size={34} status /> <span className="agent-nav-copy"><strong className="ellipsis">{a.name}</strong><span className="ellipsis">{a.role.split(':')[0] || 'Custom agent'}</span></span>
-                  {a.status === 'waiting' && <span className="count warn">!</span>}
-                </Link>
-                {agents
-                  .filter((h) => h.parentId === a.id)
-                  .map((h) => (
-                    <Link key={h.id} href={`/agents/${h.id}`} className={`side-item helper-item ${is(`/agents/${h.id}`) ? 'active' : ''}`} title={`${h.name}: a short-lived helper of ${a.name}`}>
-                      <Avatar member={h} size={22} status />
-                      <span className="ellipsis">{h.name}</span>
-                      <span className="sub">helper</span>
-                    </Link>
-                  ))}
-              </Fragment>
-            ))}
-          {agents.length === 0 && (
-            <button className="side-item" style={{ background: 'none', border: 0, width: '100%' }} onClick={() => setNewAgent(true)}>
-              <Plus size={15} /> Add your first agent
-            </button>
-          )}
-        </div>
-        <div className="side-group">
-          <div className="side-label">
-            Channels
-            <button onClick={() => setNewChannel(true)} title="New channel">
-              <Plus size={14} />
-            </button>
-          </div>
-          {channels
-            .filter((c) => c.kind === 'channel')
-            .map((c) => (
-              <Link key={c.id} href={`/c/${c.id}`} className={`side-item ${is(`/c/${c.id}`) ? 'active' : ''}`}>
-                <Hash size={15} className="hash" /> {c.name}
-              </Link>
-            ))}
-        </div>
+  async function signOut() {
+    await api.post('/auth/sign-out').catch(() => undefined);
+    window.location.replace('/');
+  }
 
-        <div className="side-group">
-          <div className="side-label">Workspace</div>
-          <Link href="/search" className={`side-item ${is('/search') ? 'active' : ''}`}>
-            <Search size={16} /> Search
-          </Link>
-          <Link href="/approvals" className={`side-item ${is('/approvals') ? 'active' : ''}`}>
-            <ShieldAlert size={16} /> Approvals {approvals > 0 && <span className="count warn">{approvals}</span>}
-          </Link>
-          <Link href="/tasks" className={`side-item ${is('/tasks') ? 'active' : ''}`}>
-            <KanbanSquare size={16} /> Tasks {openTasks > 0 && <span className="sub">{openTasks} open</span>}
-          </Link>
-          <Link href="/files" className={`side-item ${is('/files') ? 'active' : ''}`}>
-            <FolderOpen size={16} /> Shared files
-          </Link>
-          <Link href="/skills" className={`side-item ${is('/skills') ? 'active' : ''}`}>
-            <BookOpen size={16} /> Skills
-          </Link>
-          <Link href="/activity" className={`side-item ${is('/activity') ? 'active' : ''}`}>
-            <Activity size={16} /> Activity
-          </Link>
+  return (
+    <MenuButton label="Your profile and settings" align="start" className={`profile-button ${pausedAll ? 'paused' : ''}`} trigger={<Avatar member={me ?? undefined} size={34} />}>
+      <div className="menu-profile">
+        <Avatar member={me ?? undefined} size={36} />
+        <div className="grow" style={{ minWidth: 0 }}>
+          <strong className="ellipsis">{me?.name}</strong>
+          <span>{teamMode ? 'Team workspace' : 'Personal workspace'}</span>
         </div>
       </div>
-      <div className="side-footer">
-        <div className="theme-switch" role="group" aria-label="Appearance">
-          {([['light', 'Light', Sun], ['dark', 'Dark', Moon], ['system', 'System', Monitor]] as const).map(([value, label, Icon]) => (
-            <button key={value} title={`${label} theme`} aria-label={`${label} theme`} aria-pressed={theme === value} onClick={() => setTheme(value)}><Icon size={14} /><span>{label}</span></button>
-          ))}
-        </div>
-        <Link href="/settings" className={`side-item ${is('/settings') ? 'active' : ''}`} style={{ marginBottom: 8 }}>
-          <Settings size={16} /> Settings
-        </Link>
-        <button className={`pause-all ${pausedAll ? 'on' : ''}`} onClick={togglePauseAll}>
-          {pausedAll ? <Play size={14} /> : <Pause size={14} />}
-          {pausedAll ? 'Resume all agents' : 'Pause all agents'}
+      <MenuSeparator />
+      <MenuItem onSelect={() => navigate('/settings')}>
+        <Settings size={15} className="faint" /> Settings
+      </MenuItem>
+      <MenuItem onSelect={() => navigate('/apps')}>
+        <Plug size={15} className="faint" /> Connect apps
+      </MenuItem>
+      <MenuItem onSelect={() => void togglePauseAll()}>
+        {pausedAll ? <Play size={15} className="faint" /> : <Pause size={15} className="faint" />} {pausedAll ? 'Resume all agents' : 'Pause all agents'}
+      </MenuItem>
+      <MenuSeparator />
+      <MenuLabel>Appearance</MenuLabel>
+      <div className="segmented menu-theme" role="group" aria-label="Appearance">
+        {([['dark', 'Dark', Moon], ['light', 'Light', Sun], ['system', 'Auto', Monitor]] as const).map(([value, label, Icon]) => (
+          <button key={value} type="button" aria-pressed={theme === value} onClick={() => setTheme(value)}>
+            <Icon size={13} /> {label}
+          </button>
+        ))}
+      </div>
+      {teamMode && (
+        <>
+          <MenuSeparator />
+          <MenuItem onSelect={() => void signOut()}>
+            <LogOut size={15} className="faint" /> Sign out
+          </MenuItem>
+        </>
+      )}
+    </MenuButton>
+  );
+}
+
+export function Sidebar() {
+  const [location] = useLocation();
+  const me = useStore((s) => s.me);
+  const collapsed = useStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const pausedAll = useStore((s) => s.pausedAll);
+  const conversations = useConversations();
+  const is = (path: string) => location === path || location.startsWith(`${path}/`) || location.startsWith(`${path}?`);
+  const inApps = is('/apps') || is('/skills') || is('/files');
+
+  return (
+    <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} id="workspace-navigation" aria-label="Workspace">
+      <div className="side-top">
+        <button className="icon-btn" onClick={toggleSidebar} aria-label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'} title={collapsed ? 'Expand' : 'Collapse'}>
+          <PanelLeft size={18} />
         </button>
+        <span className="spacer" />
+        <Link href="/search" className={`icon-btn ${is('/search') ? 'active' : ''}`} aria-label="Search" title="Search">
+          <Search size={18} />
+        </Link>
+        <Link href="/new" className={`icon-btn ${is('/new') ? 'active' : ''}`} aria-label="New chat" title="New chat">
+          <Plus size={19} />
+        </Link>
       </div>
-      {newAgent && <NewAgentDialog onClose={() => setNewAgent(false)} />}
-      {newChannel && <NewChannelDialog onClose={() => setNewChannel(false)} />}
+      {pausedAll && <div className="paused-note">{collapsed ? <Pause size={14} /> : <><Pause size={13} /> All agents are paused</>}</div>}
+      <div className="chat-list">
+        {conversations.map((c) => {
+          const active = is(c.href) || (!!c.channel && is(`/c/${c.channel.id}`));
+          const preview = c.waiting ? 'Needs your answer' : c.working ? 'Working…' : previewOf(c, me?.id, memberName);
+          return (
+            <Link key={c.key} href={c.href} className={`chat-row ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} title={collapsed ? c.title : undefined}>
+              <span className="chat-row-avatar">
+                {c.agent ? <Avatar member={c.agent} size={40} status /> : c.human ? <Avatar member={c.human} size={40} /> : <GroupAvatar agents={c.members} size={40} />}
+                {c.waiting && !c.agent && <span className="attention-dot" />}
+              </span>
+              <span className="chat-row-text">
+                <strong className="ellipsis">{c.title}</strong>
+                {preview && <span className={`ellipsis ${c.waiting ? 'needs-you' : c.working ? 'working' : ''}`}>{preview}</span>}
+              </span>
+            </Link>
+          );
+        })}
+        {conversations.length === 0 && !collapsed && (
+          <Link href="/new" className="side-empty">
+            <Plus size={15} /> Make your first bot
+          </Link>
+        )}
+      </div>
+      <div className="side-bottom">
+        <ProfileMenu />
+        <Link href="/apps" className={`connect-apps ${inApps ? 'active' : ''}`} title="Connect apps, skills and shared files" aria-label="Connect apps">
+          <span className="connect-label">Connect apps</span>
+          <span className="app-tiles" aria-hidden="true">
+            <span className="tile plug"><Plug size={11} /></span>
+            <span className="tile skill"><BookOpen size={11} /></span>
+            <span className="tile file"><FolderOpen size={11} /></span>
+          </span>
+        </Link>
+      </div>
     </nav>
   );
 }

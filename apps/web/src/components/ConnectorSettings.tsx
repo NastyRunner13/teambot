@@ -79,7 +79,7 @@ export function ConnectorSettings() {
       <h2>Connectors</h2>
       <p className="muted small">
         Connect the apps your team works in through their MCP servers. You sign in once in your browser; the sign-in is stored encrypted and agents never see it. An agent gets a
-        connector's tools when you tick it in the agent's settings, and every call passes your action policy (by default, it asks you first).
+        connector's tools when you tick it in the agent's Customize page, and every call passes your action policy (by default, it asks you first).
       </p>
       {connectors.length > 0 && (
         <div className="list" style={{ marginBottom: 12 }}>

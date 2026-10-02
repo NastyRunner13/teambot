@@ -7,14 +7,14 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, TASK_STATUSES, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type Schedule, type TaskStatus, type WsFrame } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, TASK_STATUSES, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type TaskStatus, type WsFrame } from '@teambot/shared';
 import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
 import { addAgent, nameTaken, removeAgent } from './runtime/helpers.js';
 import { routineSecret } from './runtime/triggers.js';
-import { MAX_UPLOAD_BYTES, deleteSharedFile, listShared, openSharedFile, saveUpload, sharedPath as toSharedPath, toSharedRef } from './shared-files.js';
+import { MAX_UPLOAD_BYTES, deleteSharedFile, listShared, openSharedFile, realSharedPath, saveUpload, sharedPath as toSharedPath, toSharedRef } from './shared-files.js';
 import { SKILL_NAME_RE } from './skills.js';
 import { MAX_MEMORY_BYTES } from './memory.js';
 import { TOKEN_SECRET as TELEGRAM_TOKEN } from './bridges/telegram.js';
@@ -293,21 +293,25 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   // ── bootstrap & health ───────────────────────────────────────────────
   server.get('/api/health', health);
 
-  server.get('/api/bootstrap', async (req): Promise<Bootstrap> => ({
-    me: me(req),
-    teamMode: app.auth.teamMode,
-    humans: store.listHumans(),
-    agents: store.listAgents(),
-    channels: store.listChannels().filter((c) => workspace.canSee(c, me(req).id)),
-    tasks: store.listTasks(),
-    approvals: store.listApprovals({ status: 'pending' }).filter((a) => channelVisible(a.channelId, me(req).id) && runVisible(a.runId, me(req).id)),
-    activeRuns: store.listRuns({ statuses: ACTIVE_RUN_STATUSES, limit: 200 }).filter((r) => channelVisible(r.channelId, me(req).id)),
-    schedules: store.listSchedules().map(presentSchedule),
-    skills: app.skills.list(),
-    secrets: vault.agentNames(),
-    pausedAll: runtime.pausedAll,
-    health: await health(),
-  }));
+  server.get('/api/bootstrap', async (req): Promise<Bootstrap> => {
+    const channels = store.listChannels().filter((c) => workspace.canSee(c, me(req).id));
+    return {
+      me: me(req),
+      teamMode: app.auth.teamMode,
+      humans: store.listHumans(),
+      agents: store.listAgents(),
+      channels,
+      lastMessages: channels.flatMap((c) => store.listTopLevel(c.id, { limit: 1 })),
+      tasks: store.listTasks(),
+      approvals: store.listApprovals({ status: 'pending' }).filter((a) => channelVisible(a.channelId, me(req).id) && runVisible(a.runId, me(req).id)),
+      activeRuns: store.listRuns({ statuses: ACTIVE_RUN_STATUSES, limit: 200 }).filter((r) => channelVisible(r.channelId, me(req).id)),
+      schedules: store.listSchedules().map(presentSchedule),
+      skills: app.skills.list(),
+      secrets: vault.agentNames(),
+      pausedAll: runtime.pausedAll,
+      health: await health(),
+    };
+  });
 
   server.patch('/api/me', async (req) => {
     const { name } = parse(z.object({ name: z.string().trim().min(1).max(40) }), req.body);
@@ -406,6 +410,30 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   server.get<{ Params: { id: string }; Querystring: { limit?: string } }>('/api/agents/:id/runs', async (req) =>
     store.listRuns({ agentId: agentOr404(req.params.id).id, limit: Number(req.query.limit ?? 30) }).filter((r) => channelVisible(r.channelId, me(req).id)),
   );
+
+  /** Files attached to these messages that are still in /shared: newest first, each path once. */
+  const libraryOf = (messages: Message[]): LibraryItem[] => {
+    const seen = new Set<string>();
+    const items: LibraryItem[] = [];
+    for (const m of messages) {
+      for (const a of m.attachments) {
+        if (seen.has(a.path)) continue;
+        seen.add(a.path);
+        let exists = false;
+        try {
+          exists = !!realSharedPath(cfg.sharedDir, a.path);
+        } catch {
+          // It leads outside /shared now: leave it out.
+        }
+        if (exists) items.push({ ...a, messageId: m.id, channelId: m.channelId, authorId: m.authorId, createdAt: m.createdAt });
+      }
+    }
+    return items;
+  };
+  server.get<{ Params: { id: string } }>('/api/agents/:id/library', async (req) =>
+    libraryOf(store.listWithAttachments({ authorId: agentOr404(req.params.id).id }).filter((m) => channelVisible(m.channelId, me(req).id))),
+  );
+  server.get<{ Params: { id: string } }>('/api/channels/:id/library', async (req) => libraryOf(store.listWithAttachments({ channelId: channelFor(req, req.params.id).id })));
 
   // ── computers ────────────────────────────────────────────────────────
   server.get<{ Params: { id: string } }>('/api/agents/:id/computer', async (req) => {
@@ -585,6 +613,11 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   });
 
   // ── runs ─────────────────────────────────────────────────────────────
+  // Summaries for the work notes conversations show above an agent's reply: /api/runs?ids=a,b
+  server.get<{ Querystring: { ids?: string } }>('/api/runs', async (req) => {
+    const ids = [...new Set((req.query.ids ?? '').split(',').filter(Boolean))].slice(0, 200);
+    return store.runSummaries(ids).filter((r) => channelVisible(r.channelId, me(req).id));
+  });
   server.get<{ Params: { id: string } }>('/api/runs/:id', async (req) => {
     const run = store.getRun(req.params.id);
     if (!run || !channelVisible(run.channelId, me(req).id)) throw new HttpError(404, 'run not found');

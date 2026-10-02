@@ -171,7 +171,7 @@ function Editor({ name }: { name: string }) {
       </div>
       <dl className="kv" style={{ marginTop: 20 }}>
         <dt>Used by</dt>
-        <dd>{users.length ? users.map((a) => `${a.avatar} ${a.name}`).join(', ') : 'No agent has access (change it in an agent’s Customize tab)'}</dd>
+        <dd>{users.length ? users.map((a) => a.name).join(', ') : 'No agent has access (change it in an agent’s Customize page)'}</dd>
         <dt>Files</dt>
         <dd>
           {skill.files.length ? (
@@ -194,11 +194,8 @@ export function SkillsView({ name }: { name?: string }) {
 
   return (
     <>
-      <div className="page-header">
-        <div className="grow" style={{ minWidth: 0 }}>
-          <h1>Skills</h1>
-          <div className="sub">Written procedures your agents load and follow, in the open SKILL.md format.</div>
-        </div>
+      <div className="hub-toolbar">
+        <span className="small muted grow">Written procedures your agents load and follow, in the open SKILL.md format.</span>
         <button className="btn sm" onClick={() => setCreating(true)}>
           <Plus size={14} /> New skill
         </button>
@@ -211,7 +208,7 @@ export function SkillsView({ name }: { name?: string }) {
             </div>
           )}
           {skills.map((s) => (
-            <div key={s.name} className="list-row clickable" style={{ background: s.name === name ? 'var(--accent-weak)' : undefined }} onClick={() => navigate(`/skills/${s.name}`)}>
+            <div key={s.name} className={`list-row clickable ${s.name === name ? 'selected' : ''}`} onClick={() => navigate(`/skills/${s.name}`)}>
               <BookOpen size={15} className="faint" />
               <div className="grow" style={{ minWidth: 0 }}>
                 <div className="ellipsis mono small" style={{ fontWeight: 600 }}>
@@ -222,7 +219,7 @@ export function SkillsView({ name }: { name?: string }) {
             </div>
           ))}
         </div>
-        <div className="grow" style={{ overflowY: 'auto', padding: '16px 20px' }}>
+        <div className="split-detail">
           {name ? <Editor key={name} name={name} /> : <div className="muted">{skills.length ? 'Pick a skill to read or edit it.' : 'Create your first skill to get started.'}</div>}
         </div>
       </div>

@@ -1,5 +1,5 @@
 // Message box with @mention autocomplete and file attachments. Enter sends, Shift+Enter adds a line.
-import { ArrowUp, AtSign, LoaderCircle, Paperclip, X } from 'lucide-react';
+import { ArrowUp, LoaderCircle, Paperclip, Plus, X } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { bytes } from '../lib/format';
@@ -129,42 +129,9 @@ export function Composer({ placeholder, onSend, autoFocus }: { placeholder: stri
             ))}
           </div>
         )}
-        <textarea
-          ref={ref}
-          rows={1}
-          value={text}
-          autoFocus={autoFocus}
-          placeholder={dragging ? 'Drop files to attach them' : placeholder}
-          aria-label="Message"
-          onChange={(e) => {
-            setText(e.target.value);
-            detect(e.target.value, e.target.selectionStart);
-            e.target.style.height = 'auto';
-            e.target.style.height = `${Math.min(e.target.scrollHeight, 240)}px`;
-          }}
-          onPaste={(e) => {
-            if (e.clipboardData.files.length) {
-              e.preventDefault();
-              attach(e.clipboardData.files);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
-            if (options.length) {
-              if (e.key === 'ArrowDown') return (e.preventDefault(), setActive((a) => (a + 1) % options.length));
-              if (e.key === 'ArrowUp') return (e.preventDefault(), setActive((a) => (a - 1 + options.length) % options.length));
-              if (e.key === 'Enter' || e.key === 'Tab') return (e.preventDefault(), insert(options[active].name));
-              if (e.key === 'Escape') return setQuery(null);
-            }
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <div className="composer-actions">
-          <button className="btn ghost sm icon" title="Attach files" aria-label="Attach files" onClick={() => picker.current?.click()}>
-            <Paperclip size={15} />
+        <div className="composer-row">
+          <button type="button" className="composer-attach" title="Attach files" aria-label="Attach files" onClick={() => picker.current?.click()}>
+            <Plus size={20} />
           </button>
           <input
             ref={picker}
@@ -176,11 +143,41 @@ export function Composer({ placeholder, onSend, autoFocus }: { placeholder: stri
               e.target.value = '';
             }}
           />
-          <AtSign size={14} />
-          <span>Mention a teammate <span className="composer-key-hint">· Shift+Enter for a new line</span></span>
-          <span className="spacer" />
-          <button className="btn primary icon send-button" title="Send message" aria-label={sending ? 'Sending message' : 'Send message'} disabled={!ready} onClick={send}>
-            <ArrowUp size={18} />
+          <textarea
+            ref={ref}
+            rows={1}
+            value={text}
+            autoFocus={autoFocus}
+            placeholder={dragging ? 'Drop files to attach them' : placeholder}
+            aria-label="Message"
+            onChange={(e) => {
+              setText(e.target.value);
+              detect(e.target.value, e.target.selectionStart);
+              e.target.style.height = 'auto';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 240)}px`;
+            }}
+            onPaste={(e) => {
+              if (e.clipboardData.files.length) {
+                e.preventDefault();
+                attach(e.clipboardData.files);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (options.length) {
+                if (e.key === 'ArrowDown') return (e.preventDefault(), setActive((a) => (a + 1) % options.length));
+                if (e.key === 'ArrowUp') return (e.preventDefault(), setActive((a) => (a - 1 + options.length) % options.length));
+                if (e.key === 'Enter' || e.key === 'Tab') return (e.preventDefault(), insert(options[active].name));
+                if (e.key === 'Escape') return setQuery(null);
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <button type="button" className="send-button" title="Send (Enter) · new line: Shift+Enter" aria-label={sending ? 'Sending message' : 'Send message'} disabled={!ready} onClick={send}>
+            <ArrowUp size={18} strokeWidth={2.4} />
           </button>
         </div>
       </div>

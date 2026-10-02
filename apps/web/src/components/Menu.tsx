@@ -4,7 +4,25 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 
 const CloseMenu = createContext<() => void>(() => {});
 
-export function MenuButton({ label, title, className = '', children }: { label: string; title?: string; className?: string; children: ReactNode }) {
+/**
+ * `trigger` replaces the "⋯" icon (its button then gets `className` alone, without the hover-only styling).
+ * `align="start"` lines the menu up with the button's left edge instead of its right one.
+ */
+export function MenuButton({
+  label,
+  title,
+  className = '',
+  trigger: content,
+  align = 'end',
+  children,
+}: {
+  label: string;
+  title?: string;
+  className?: string;
+  trigger?: ReactNode;
+  align?: 'start' | 'end';
+  children: ReactNode;
+}) {
   const [at, setAt] = useState<DOMRect | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setAt(null), []);
@@ -14,7 +32,7 @@ export function MenuButton({ label, title, className = '', children }: { label: 
       <button
         ref={trigger}
         type="button"
-        className={`btn sm icon ghost menu-trigger ${className}`}
+        className={content ? className : `btn sm icon ghost menu-trigger ${className}`}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={at !== null}
@@ -24,11 +42,11 @@ export function MenuButton({ label, title, className = '', children }: { label: 
           setAt((open) => (open ? null : rect));
         }}
       >
-        <MoreHorizontal size={15} />
+        {content ?? <MoreHorizontal size={15} />}
       </button>
       {at && (
         <CloseMenu.Provider value={close}>
-          <MenuPopup at={at} trigger={trigger} onClose={close}>
+          <MenuPopup at={at} align={align} trigger={trigger} onClose={close}>
             {children}
           </MenuPopup>
         </CloseMenu.Provider>
@@ -37,7 +55,19 @@ export function MenuButton({ label, title, className = '', children }: { label: 
   );
 }
 
-function MenuPopup({ at, trigger, onClose, children }: { at: DOMRect; trigger: React.RefObject<HTMLButtonElement | null>; onClose: () => void; children: ReactNode }) {
+function MenuPopup({
+  at,
+  align,
+  trigger,
+  onClose,
+  children,
+}: {
+  at: DOMRect;
+  align: 'start' | 'end';
+  trigger: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  children: ReactNode;
+}) {
   const menu = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(at.bottom + 4);
 
@@ -69,7 +99,7 @@ function MenuPopup({ at, trigger, onClose, children }: { at: DOMRect; trigger: R
   }, [onClose, trigger]);
 
   return (
-    <div ref={menu} className="menu" role="menu" style={{ top, right: Math.max(8, window.innerWidth - at.right) }}>
+    <div ref={menu} className="menu" role="menu" style={align === 'start' ? { top, left: Math.max(8, at.left) } : { top, right: Math.max(8, window.innerWidth - at.right) }}>
       {children}
     </div>
   );

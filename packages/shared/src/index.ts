@@ -108,6 +108,14 @@ export interface Attachment {
   size: number;
 }
 
+/** A file someone shared in a message: an agent's or a conversation's library. */
+export interface LibraryItem extends Attachment {
+  messageId: string;
+  channelId: string;
+  authorId: string;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   channelId: string;
@@ -205,6 +213,11 @@ export interface Run {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A run as a conversation shows it: the run plus how many actions (tool calls) it took. */
+export interface RunSummary extends Run {
+  toolCalls: number;
 }
 
 /** `review`: an independent reviewer model decides between allow, ask and deny. */
@@ -385,6 +398,8 @@ export interface Bootstrap {
   humans: Human[];
   agents: Agent[];
   channels: Channel[];
+  /** The newest top-level message of each channel above, for the conversation list. */
+  lastMessages: Message[];
   tasks: Task[];
   approvals: Approval[];
   activeRuns: Run[];

@@ -4,50 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import type { SharedFile } from '@teambot/shared';
 import { api } from '../api';
-import { Markdown } from '../components/Markdown';
+import { FileActions, FileBody, deleteSharedFile, fileUrl } from '../components/FilePreview';
 import { MenuButton, MenuItem, MenuSeparator } from '../components/Menu';
 import { ago, bytes } from '../lib/format';
 import { useStore } from '../store';
-
-const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
-const TEXT = /\.(md|txt|csv|json|log|ya?ml|py|js|ts|tsx|html|css|sh|sql|xml|svg)$/i;
-
-function Preview({ path, onDelete }: { path: string; onDelete: () => void }) {
-  const [text, setText] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const url = `/api/shared/file?path=${encodeURIComponent(path)}`;
-
-  useEffect(() => {
-    setText(null);
-    setError(null);
-    if (!TEXT.test(path)) return;
-    fetch(url)
-      .then(async (r) => (r.ok ? setText(await r.text()) : setError((await r.json()).error)))
-      .catch((err) => setError(String(err)));
-  }, [path, url]);
-
-  return (
-    <div>
-      <div className="row" style={{ marginBottom: 10 }}>
-        <h2 className="grow mono ellipsis" style={{ fontSize: 14 }}>
-          {path}
-        </h2>
-        <a className="btn sm" href={`${url}&download=1`}>
-          <Download size={13} /> Download
-        </a>
-        <button className="btn sm ghost danger" onClick={onDelete}>
-          <Trash2 size={13} /> Delete
-        </button>
-      </div>
-      <div className="file-preview">
-        {error && <div className="error-text">{error}</div>}
-        {IMAGE.test(path) && <img src={url} alt={path} />}
-        {text !== null && (/\.md$/i.test(path) ? <Markdown text={text} /> : <pre>{text}</pre>)}
-        {!IMAGE.test(path) && !TEXT.test(path) && <div className="muted">No preview for this file type. Download it to open.</div>}
-      </div>
-    </div>
-  );
-}
 
 export function FilesView() {
   const search = useSearch();
@@ -82,21 +42,13 @@ export function FilesView() {
   }
 
   async function remove(path: string) {
-    if (!confirm(`Delete ${path}? Every agent loses it too, and it can't be undone.`)) return;
-    try {
-      await api.del(`/shared/file?path=${encodeURIComponent(path)}`);
-      notify(`Deleted ${path.replace('/shared/', '')}`);
-      if (path === selected) navigate('/files');
-    } catch (err) {
-      notify((err as Error).message, 'error');
-    }
+    if ((await deleteSharedFile(path)) && path === selected) navigate('/files');
   }
 
   return (
     <>
-      <div className="page-header">
-        <h1 className="grow">Shared files</h1>
-        <span className="small muted">
+      <div className="hub-toolbar">
+        <span className="small muted grow">
           Every agent sees this folder at <span className="mono">/shared</span>
         </span>
         <button className="btn sm icon" onClick={load} title="Refresh" aria-label="Refresh">
@@ -123,12 +75,7 @@ export function FilesView() {
             const name = f.path.replace('/shared/', '');
             const open = () => navigate(`/files?path=${encodeURIComponent(f.path)}`);
             return (
-              <div
-                key={f.path}
-                className="list-row clickable hover-actions"
-                style={{ background: f.path === selected ? 'var(--accent-weak)' : undefined }}
-                onClick={open}
-              >
+              <div key={f.path} className={`list-row clickable hover-actions ${f.path === selected ? 'selected' : ''}`} onClick={open}>
                 <FileText size={15} className="faint" />
                 <div className="grow" style={{ minWidth: 0 }}>
                   <div className="ellipsis mono small">{name}</div>
@@ -140,7 +87,7 @@ export function FilesView() {
                   <MenuItem onSelect={open}>
                     <Eye size={14} className="faint" /> Open
                   </MenuItem>
-                  <MenuItem href={`/api/shared/file?path=${encodeURIComponent(f.path)}&download=1`} download>
+                  <MenuItem href={`${fileUrl(f.path)}&download=1`} download>
                     <Download size={14} className="faint" /> Download
                   </MenuItem>
                   <MenuSeparator />
@@ -152,8 +99,20 @@ export function FilesView() {
             );
           })}
         </div>
-        <div className="grow" style={{ overflowY: 'auto', padding: '16px 20px' }}>
-          {selected ? <Preview path={selected} onDelete={() => void remove(selected)} /> : <div className="muted">Pick a file to preview it.</div>}
+        <div className="split-detail">
+          {selected ? (
+            <>
+              <div className="row" style={{ marginBottom: 10 }}>
+                <h2 className="grow mono ellipsis" style={{ fontSize: 14 }}>
+                  {selected}
+                </h2>
+                <FileActions path={selected} onDeleted={() => navigate('/files')} />
+              </div>
+              <FileBody path={selected} />
+            </>
+          ) : (
+            <div className="muted">Pick a file to preview it.</div>
+          )}
         </div>
       </div>
     </>

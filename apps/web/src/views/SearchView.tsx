@@ -1,4 +1,4 @@
-// Search past conversations and the task board. Agents search the same history with search_history.
+// Search past conversations and the tasks agents track. Agents search the same history with search_history.
 import { KanbanSquare, MessageSquare, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearch } from 'wouter';
@@ -64,7 +64,7 @@ export function SearchView() {
             <h2>Tasks</h2>
             <div className="list">
               {results.tasks.map(({ task, snippet }) => (
-                <div key={task.id} className="list-row clickable search-hit" onClick={() => navigate('/tasks')}>
+                <div key={task.id} className={`list-row search-hit ${task.channelId ? 'clickable' : ''}`} onClick={() => task.channelId && navigate(`/c/${task.channelId}`)} title={task.channelId ? 'Open the chat it belongs to' : undefined}>
                   <KanbanSquare size={15} className="faint" />
                   <div className="grow" style={{ minWidth: 0 }}>
                     <div className="ellipsis">

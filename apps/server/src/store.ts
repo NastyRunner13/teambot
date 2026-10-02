@@ -18,6 +18,7 @@ import {
   type Message,
   type Run,
   type RunStatus,
+  type RunSummary,
   type Schedule,
   type Spend,
   type Task,
@@ -656,6 +657,17 @@ export class Store {
     );
     return rows.map(toMessage).reverse();
   }
+  /** Messages that carry files, newest first: everything one member shared, or everything shared in one channel. */
+  listWithAttachments(opts: { authorId?: string; channelId?: string; limit?: number }): Message[] {
+    const where = ["attachments != '[]'"];
+    if (opts.authorId) where.push('author_id = :authorId');
+    if (opts.channelId) where.push('channel_id = :channelId');
+    return this.all(`SELECT * FROM messages WHERE ${where.join(' AND ')} ORDER BY created_at DESC, rowid DESC LIMIT :limit`, {
+      authorId: opts.authorId,
+      channelId: opts.channelId,
+      limit: opts.limit ?? 200,
+    }).map(toMessage);
+  }
   /** Messages containing every term (case-insensitive), newest first. */
   searchMessages(terms: string[], opts: { limit?: number; before?: string } = {}): Message[] {
     if (!terms.length) return [];
@@ -801,6 +813,17 @@ export class Store {
       agentId: opts.agentId,
       limit: opts.limit ?? 50,
     }).map(toRun);
+  }
+  /** These runs (unknown ids are skipped), each with how many tool calls it made. */
+  runSummaries(ids: string[]): RunSummary[] {
+    if (!ids.length) return [];
+    const params: Record<string, string> = {};
+    ids.forEach((id, i) => (params[`id${i}`] = id));
+    return this.all(
+      `SELECT r.*, (SELECT COUNT(*) FROM events e WHERE e.run_id = r.id AND e.type = 'tool.checked') AS tool_calls
+       FROM runs r WHERE r.id IN (${ids.map((_, i) => `:id${i}`).join(',')})`,
+      params,
+    ).map((r) => ({ ...toRun(r), toolCalls: Number(r.tool_calls) }));
   }
   getTranscript<T>(runId: string): T[] {
     return json<T[]>(this.get('SELECT transcript FROM run_transcripts WHERE run_id = :runId', { runId })?.transcript, []);
