@@ -1,153 +1,155 @@
 ---
 name: TeamBot
-description: A monochrome workspace for a personal team of AI agents.
+description: A deep-black chat workspace for a personal team of AI agents.
 colors:
-  light-background: "#f7f7f7"
-  light-surface: "#ffffff"
-  light-secondary: "#f5f5f5"
-  light-text: "#202020"
-  light-muted: "#656565"
-  light-border: "#e7e7e7"
-  dark-background: "#111111"
-  dark-surface: "#181818"
-  dark-secondary: "#202020"
-  dark-text: "#eeeeee"
-  dark-muted: "#ababab"
-  dark-border: "#303030"
+  dark-background: "#000000"
+  dark-surface: "#121212"
+  dark-raised: "#1b1b1b"
+  dark-active: "#262626"
+  dark-text: "#f4f4f4"
+  dark-muted: "#9b9b9b"
+  dark-border: "#2c2c2c"
+  light-background: "#ffffff"
+  light-surface: "#f4f4f4"
+  light-raised: "#ececec"
+  light-active: "#e4e4e4"
+  light-text: "#111111"
+  light-muted: "#646464"
+  light-border: "#dcdcdc"
 typography:
   body:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontFamily: "Inter Variable, Inter, -apple-system, Segoe UI, sans-serif"
     fontSize: "14px"
     lineHeight: 1.5
     fontWeight: 400
+  message:
+    fontFamily: "Inter Variable"
+    fontSize: "15px"
+    lineHeight: 1.62
   page-title:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "17px"
-    fontWeight: 600
-    letterSpacing: "-0.02em"
-  welcome-title:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "30px"
-    fontWeight: 550
-    letterSpacing: "-0.035em"
+    fontFamily: "Inter Variable"
+    fontSize: "26px"
+    fontWeight: 700
+    letterSpacing: "-0.025em"
 rounded:
-  control: "8px"
-  panel: "12px"
-  workspace: "14px"
+  control: "10px"
+  input: "12px"
+  card: "16px"
+  bubble: "22px"
+  pill: "999px"
 spacing:
   small: "8px"
   medium: "16px"
   large: "24px"
   section: "32px"
 components:
-  primary-button-light:
-    backgroundColor: "{colors.light-text}"
-    textColor: "{colors.light-surface}"
-    rounded: "{rounded.control}"
-    height: "36px"
   primary-button-dark:
     backgroundColor: "{colors.dark-text}"
-    textColor: "{colors.dark-surface}"
-    rounded: "{rounded.control}"
-    height: "36px"
-  input-light:
-    backgroundColor: "{colors.light-surface}"
-    textColor: "{colors.light-text}"
-    rounded: "{rounded.control}"
-    padding: "9px 11px"
+    textColor: "{colors.dark-background}"
+    rounded: "{rounded.pill}"
+    height: "40px"
+  primary-button-light:
+    backgroundColor: "{colors.light-text}"
+    textColor: "{colors.light-background}"
+    rounded: "{rounded.pill}"
+    height: "40px"
+  composer:
+    backgroundColor: "{colors.dark-surface}"
+    rounded: "28px"
 ---
 
 ## Overview
 
-TeamBot is a self-hosted, single-user office for named AI agents. People return to a conversation, give a teammate work, and review results. The interface should make that sequence easy to follow. A solo builder may use it in daylight or late at night, so light and dark receive equal attention.
+TeamBot is a self-hosted office for named AI agents. People return to a conversation, give a teammate work, watch it happen, and review results. The interface is a chat app first: a list of conversations, one conversation, and a details panel beside it.
 
-This design pass covers the existing React application in `apps/web`. Product context comes from `README.md`, `CLAUDE.md`, `docs/FEATURE_MAP.md`, and `docs/research/landscape.md`. The roadmap describes both implemented and planned capabilities; the running code determines what the UI can offer today.
+The October 2 2026 redesign follows [Grok Bot](https://x.ai/bot) at the owner's request: a deep-black canvas, a conversation list with previews, bubble messages with a floating name pill, a profile panel with Details, Library and Computer, routines with on/off switches, and a "Connect apps" entry at the bottom of the sidebar. It is drawn from scratch; no Grok artwork, icons or code are used.
 
-References reviewed on October 1, 2026:
-
-- [Grok Bot](https://x.ai/bot) and its [launch description](https://x.ai/news/introducing-grok-bot). The public product illustration presents a neutral conversation list, distinct agent identities, and a large conversation pane. TeamBot adopts the emphasis on teammates and direct communication.
-- [How we designed Muse](https://introducing.muse.ai/) and [Meta's introduction](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/). Muse describes personal names and avatars, ongoing conversations, visible activity, and explicit approval controls. TeamBot uses these as interaction references, while retaining its shared channels, task board, and per-agent computers.
-
-These are public references, not a claim of access to either signed-in product. No competitor artwork is included in TeamBot.
-
-The sidebar puts agents first, followed by channels and workspace tools. Chat is the default agent view. Computer, work log, routines, and customization stay available as secondary tabs. The computer dock opens beside the conversation on wide screens and overlays it on smaller screens.
-
-This session adds no new agent runtime capabilities. Memory, voice, generated avatars, marketplaces, new integrations, and other roadmap features remain future work. Identity controls edit the existing name, avatar, color, role, instructions, model, and MCP configuration fields.
+What changed from the first design: the Activity, Approvals and Tasks pages are gone. Approvals appear in the conversation where the agent asked; what agents did shows in the conversation as work notes. Later the same day the task board went altogether: agents show their plan as a progress checklist instead. Skills, shared files, connectors and chat bridges live together under Connect apps.
 
 ## Colors
 
-The workspace uses neutral grays. Primary actions invert between dark ink on light surfaces and light ink on dark surfaces. There is no purple application accent or gradient branding.
+Dark (deep black) is the default; Light and Auto (follows `prefers-color-scheme`) are picked in the profile menu. The preference is stored as `teambot-theme` in local storage and applied in `index.html` before React renders, so there is no flash.
 
-Use the semantic variables in `apps/web/src/styles.css`, especially `--panel`, `--panel-2`, `--text`, `--muted`, `--border`, `--accent`, and `--on-accent`. Do not hard-code white text on primary buttons, because those buttons become light in dark mode.
+Use the variables in `apps/web/src/styles.css`: `--bg`, `--panel`, `--panel-2` (bubbles, inputs, cards), `--panel-3` (hover), `--active` (selected rows and tabs), `--text`, `--muted`, `--faint`, `--border`, `--border-strong`, `--accent` and `--on-accent`. Primary buttons invert: light ink on dark, dark ink on light. Never hard-code white or black text on them.
 
-Small areas of color identify agents and communicate state. Avatar colors never tint the surrounding app. Green means success or working, amber means waiting or attention, and red means error or a destructive action. Status text accompanies these meanings. Warning banners remain visible when the server reports missing prerequisites.
+Color identifies agents and state, nothing else. Each agent's blob is drawn in its own color; the application chrome stays neutral. Green means working or done, amber means waiting for you, red means an error or a destructive action. The three tiles on the Connect apps button (blue, green, amber) are the only fixed decorative colors. Apps in Connect apps get a tile in a color of their own so they're recognizable, the way agents are: the app's initial in black or white, whichever reads better on it (`inkOn` in `lib/catalog.ts`), never the vendor's logo.
 
-The sidebar offers Light, Dark, and System. The preference is stored as `teambot-theme` in browser local storage and applied before React renders. System follows `prefers-color-scheme`, including changes while the app is open. When storage is unavailable, selecting a theme still applies for the current page.
-
-Body text and placeholders should meet WCAG AA contrast of at least 4.5:1. Muted text must remain readable in both themes. Borders divide regions without competing with the content.
+Body text and placeholders should meet WCAG AA (4.5:1) in both themes. `--muted` is for secondary text; `--faint` only for timestamps and hints.
 
 ## Typography
 
-Use the system sans-serif stack throughout the app. No external font requests are needed. Monospace is reserved for model IDs, paths, code, and technical details.
+Inter (variable, bundled through `@fontsource-variable/inter`, so nothing is fetched from the internet) for everything except code, paths and model IDs, which use the monospace stack.
 
-Navigation uses 13px text. Agent names are slightly heavier than their 11.5px role descriptions. Main text uses the body token; message prose has a 1.7 line height. Welcome headings use the welcome-title token and step down to 26px on narrow screens. Keep large headings above -0.04em letter spacing.
+UI text is 14px; message bubbles are 15px with a 1.62 line height. Conversation names in the sidebar are 14.5px semibold over a 13px preview. Page titles are 26px bold with slight negative tracking.
 
-Write short action labels such as New agent, Customize, Save changes, and Watch live. Empty states explain what to do next. Technical details belong in configuration and work logs when users need them, rather than in welcome copy.
+Write short labels: Create new agent, Customize, Pause, Edit, Full log. Empty states say what to do next.
 
-## Elevation
+## Layout
 
-Separate regions with neutral surfaces and single-pixel borders. The desktop content pane has a small inset and rounded edges. Task columns have simple headers; individual tasks have a border, without another card wrapped around the column.
+- **Sidebar** (300px; 72px when collapsed, remembered per browser): collapse, search and new-chat buttons; the conversation list newest first (a chat per agent, each group chat, and DMs with people in team mode); the profile button and Connect apps at the bottom.
+- **Chat**: messages up to 780px wide, a floating pill with the agent or group name (it opens the profile), and a pill-shaped composer with an attach button and a round send button.
+- **Panel** (400px): the agent's or group's profile, or a page opened from it (a routine, the routine editor, memory, customize, a thread, a run's full log). It sits beside the chat on wide screens and covers it at 1100px and below, where it starts closed and closes when you switch chats.
+- **Settings frame**: Settings and Connect apps share it. The sections are listed on the left (232px, under "Settings" and "Connect apps" labels) and the open one is on the right, up to 760px wide (960px for the marketplace and the policy editor). Where the frame has less than 760px of room, the sections become a strip of pills along the top that scrolls sideways.
+- At 760px and below the sidebar becomes a full-screen navigation drawer opened from the top bar.
 
-The shared modal uses native `dialog.showModal()`. This provides top-layer placement, keyboard focus containment, Escape dismissal, and focus restoration. Its backdrop dims the workspace. The dialog body scrolls while the footer remains available.
-
-The CSS z-index tokens reserve 20 for the computer dock, 30 for mobile navigation, and 60 for toasts. Native dialogs use the browser's top layer. Avoid arbitrary high z-index values.
-
-Hover feedback uses a 160ms color transition. Working indicators may animate, but all animation and transitions stop under `prefers-reduced-motion: reduce`. Do not animate page entrances or delay access to controls.
+Panel pages remember which conversation they were opened on (`panel.at` in the store); anywhere else the panel shows that conversation's own profile.
 
 ## Components
 
-### Workspace and navigation
+### Conversation list
 
-The desktop sidebar is 264px wide, reducing to 232px below 1100px. Agent rows show an avatar, name, role, and status. The new-agent action is at the top. Appearance, settings, and the global pause control are at the bottom.
+Each row: avatar (40px), name, and one line of preview — the last message without Markdown, "You:" for your own, the author's name in group chats, "Working…" while an agent works there, and "Needs your answer" (amber) when an approval waits. Idle agents show no status dot. Opening a chat doesn't reorder the list; only messages do.
 
-At 760px and below, the sidebar becomes a full-width navigation panel opened from the top bar. Selecting a destination or pressing Escape closes it. The main pane is hidden while navigation is open. Preserve all destinations on mobile.
+### Messages
 
-### Conversations
+Your messages are right-aligned bubbles; everyone else's are left-aligned. In a chat with one agent its name isn't repeated; in group chats the author's avatar and name head each run of messages. Hovering shows the time, Reply (thread) and Copy. System notices (📋, ⚠️) are centered muted text without a bubble.
 
-Messages and the composer share a maximum width of 840px. The composer has a lightly differentiated surface, a circular send button, and a mention hint. Enter sends; Shift+Enter adds a line. IME composition must not submit a message. A failed send retains its text. Switching conversations resets the draft so text cannot accidentally be sent to another agent.
+When an agent working for a conversation messages someone elsewhere, the conversation shows a centered line at that point: "Messaged [blob] Job Scout", "Messaged you" or "Posted in #launch", with the author's name first when it isn't the agent you're chatting with. Several posts in a row to the same place share one line. It opens that conversation. A conversation between two agents has a "Job Scout ⇄ Writer" pill, names the author of every message, and has no composer: a line at the bottom points to your own chat with either agent.
 
-Existing messages retain their author, timestamp, agent label, Markdown, and inline approvals. An empty channel introduces the team and links to agent conversations. First-run onboarding offers the existing starter team or a custom agent.
+### Work notes
 
-### Agent identity and customization
+While an agent works for a conversation, one live line at the bottom says what it is doing now ("Search history for …", "Waiting for your approval"), with a shimmer, led by the agent's name unless it's the one you're chatting with. An agent on a job with several steps keeps a plan (the `update_progress` checklist): then the line names the step it is on with a count ("Deep-dive tiers… · 1 of 4"), and the checklist shows below it, open by default, every step listed: done ones checked, the current one spinning, the rest as empty circles. Without a plan the line expands to the actions so far. Either way it ends with Full log, Watch its computer and Stop. Helpers working for the agent get their own live lines.
 
-Creation begins with the existing role templates. A selected template uses a contrasting border and `aria-pressed`. The editor places a live identity preview beside the form. On mobile it stacks above the fields.
+When the run finishes, a collapsed note sits above its first message: "Worked for 2m 14s · 5 steps" (the plan's steps, or "3 of 5 steps done" if it stopped short; without a plan, the number of actions). Expanded, it shows the plan, or else only actions and outcomes (tool calls, a human's answers, failures, budget stops), never the model's thinking. Runs with neither get no note. The run's page in the panel shows the plan above the full log.
 
-Offer preset emoji avatars and an editable avatar field, capped at the API's eight-character limit. Color swatches and a custom color picker update the existing avatar color. The preview reflects the draft name, role, avatar, color, and model. Changes only persist through Add agent or Save changes.
+There is no task board. Agents hand each other work by message (see the "Messaged …" line above), and a helper's result goes to the agent that started it rather than into the chat.
 
-Model search keeps the existing model catalog. If the catalog cannot load, show the error and retain the manual model ID field. MCP options appear only when servers are configured. Do not show unimplemented skills, memory, or voice controls.
+### Agent profile
 
-### Tasks, files, approvals, and settings
+Details: status with Pause/Resume; Routines as cards with the schedule in words ("Every day at 2:31 AM and 2:31 PM", in local time) and a switch; Customize and Memory rows; helpers. Library: files the agent shared in chats, grouped by Today, Yesterday, This week, This month, Older. Computer: the live screen with take-control, recent work, blocked sites, setup script and snapshots. Hovering the screen offers Expand (also an icon in the bar below it), which fills the window with the screen at 16:10 over the dimmed app, the agent's name on top and Take control and Collapse beside it. Escape collapses it, except while you have control and the screen has focus: then Escape goes to the computer. Only one view is connected at a time.
 
-The board retains its status columns and horizontal scrolling on small screens. Task cards are keyboard-accessible buttons. Files and work logs use split panes on desktop and stacked panes on mobile. Activity tables scroll within the content region.
+A routine opens to its Instruction, When to run, where it reports and its last and next run, with Pause, Edit, Run now and Delete. The editor picks a schedule in local time (every day, weekdays, weekends, certain days, every few hours or minutes, or a raw cron) and stores UTC cron. When one cron can't express the choice (times with different minutes, or local days that map to different UTC days), it says so instead of saving something else.
 
-Approvals retain explicit decision controls and history. Settings retain system health, secrets, and policy editing. Applying the shared theme must not hide warnings or change these actions.
+### Avatars
 
-### Forms and feedback
+Agents are blob characters with two eyes: eight shapes, each filled with the agent's color. The shape comes from the agent's emoji (the editor's eight emoji map to the eight shapes), so Telegram and Slack, which show the emoji, stay consistent. People are their initials in a circle. A group shows two of its agents overlapping.
 
-Use the shared button, input, textarea, select, badge, and empty-state classes. New identity inputs have associated labels. Icon buttons need accessible names. Selected swatches and templates expose their state. Focus uses a visible two-pixel outline; never remove focus feedback without a replacement.
+### Settings rows
 
-Use inline validation for form errors and status toasts for completed actions. Disable submission while saving. Keep the user's draft after a failure. Controls have larger targets on mobile.
+A section is a title (24px), an optional introduction, and groups: a 16px heading, an optional line of explanation, then rows divided by hairlines (no card around them). A row has the setting's name with one line of explanation on the left and its control on the right: a switch, a segmented control, a short input with Save, a status ("✓ Set", "Not reachable") or a button. When a row needs a form (a password, a token, a new secret), the button opens it inline under the row rather than in a dialog. On narrow screens the control drops below the text.
+
+### Connect apps
+
+- **Marketplace** (`/apps`): search, "N installed ›" with the first tiles stacked, then Featured, Chat apps and one group per category (first four apps, "Show all N"). Each app is a row in a two-column grid: tile, name and one line, and its quickest action on the right (Connect, Add for apps without sign-in, Set up for token apps and chat apps) or its state (Connected in green, Needs sign-in or Needs a token in amber, Can't connect in red). "Add a custom app" closes the list.
+- **App page** (`/apps/:id`): back link, a 56px tile with the name, category and website, the state and the main action, with Remove in the ⋯ menu. Then what agents can do with it, a token field for token apps, **Agents with access** (a switch per agent), the tools it offers and its details (sign-in, address, tool names, MCP Registry entry). Connecting from the list opens this page, so choosing agents is the next step.
+- **Installed** (`/apps/installed`): the same rows for connected apps, mcp.json servers and chat apps, then skills.
+- Skills and Files keep their list-and-detail panes, filling the frame's height.
+
+Members in team mode can look; only owners connect, remove or hand out apps.
+
+### Dialogs, menus and feedback
+
+The shared modal uses native `dialog.showModal()` (top layer, focus containment, Escape). Mark a dialog's first field with `data-autofocus`. Files open in a preview dialog from anywhere (attachments, libraries). Menus are rounded popovers; the profile menu opens upward from the bottom-left. Toasts are pills at the bottom center.
+
+z-index tokens: 25 for the overlay panel, 30 for mobile navigation, 60 for toasts.
 
 ## Do's and Don'ts
 
-- Use CSS tokens for every shared surface and text color.
-- Keep agents recognizable across navigation, conversations, and customization.
-- Keep a single dominant action in each form.
-- Check light and dark themes, keyboard access, long text, and narrow screens before extending the UI.
-- Preserve the underlying policy, approval, pause, and takeover behavior.
-- Do not introduce decorative gradients, large shadows, or colored application chrome.
-- Do not copy competitor mascots or imply that planned features work today.
-- Do not use fabricated activity, messages, or agents to fill a real workspace. Verification data belongs in an isolated test instance.
-- Do not overwrite users' agent settings merely to make the interface look consistent.
-
-For deeper product positioning in a later session, `$impeccable init` can capture a separate `PRODUCT.md`. It is not required to use this implemented design system.
+- Use the CSS tokens for every surface and text color, and check both themes.
+- Keep agents recognizable: the same blob and color in the list, the chat and the panel.
+- Keep approvals in the conversation they belong to, with explicit decision buttons.
+- Animate only live state (working dots, the live line); everything stops under `prefers-reduced-motion`.
+- Check keyboard access, long names and text, and phone width before extending the UI.
+- Do not copy competitor artwork or icons, or imply that planned features work today.
+- Do not fill a real workspace with fabricated activity. Verification data belongs in an isolated test instance.
+- Do not overwrite users' agent settings to make the interface look consistent.

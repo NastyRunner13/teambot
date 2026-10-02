@@ -1,10 +1,12 @@
-// Live view of an agent's computer (noVNC over the server's WebSocket bridge), with take-over controls.
+// Live view of an agent's computer (noVNC over the server's WebSocket bridge), with take-over controls
+// and an expanded view that fills the window.
 import RFB from '@novnc/novnc';
-import { Hand, MonitorOff, Play, RotateCcw } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Hand, Maximize2, Minimize2, MonitorOff, Play, RotateCcw } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Agent, ComputerStatus } from '@teambot/shared';
 import { api, wsUrl } from '../api';
 import { useStore } from '../store';
+import { Avatar } from './Avatar';
 
 type Info = ComputerStatus & { vncPassword: string };
 
@@ -63,6 +65,7 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
   const [info, setInfo] = useState<Info | null>(null);
   const [busy, setBusy] = useState(false);
   const [control, setControl] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -105,34 +108,43 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
   }
 
   const running = info?.state === 'running';
+  const hint = hasControl ? (waitingForHuman ? 'You are driving. Finish the step, then answer the request.' : `You are driving; ${agent.name} is paused.`) : 'Watching live (view only)';
+  // One live connection at a time: while expanded, only the expanded view shows the screen.
+  const live = running && info ? <VncCanvas agentId={agent.id} password={info.vncPassword} viewOnly={!hasControl} /> : null;
+  const offline = (
+    <div className="screen-overlay">
+      <div className="col" style={{ alignItems: 'center' }}>
+        <MonitorOff size={28} />
+        <div>
+          {!info
+            ? 'Checking the computer…'
+            : info.state === 'starting'
+              ? 'Starting the computer…'
+              : info.state === 'unavailable'
+                ? `Docker is not reachable: ${info.detail ?? ''}`
+                : info.state === 'missing'
+                  ? `${agent.name}'s computer hasn't been created yet. It starts automatically when ${agent.name} needs it.`
+                  : `${agent.name}'s computer is off.`}
+        </div>
+        {info && (info.state === 'missing' || info.state === 'stopped') && (
+          <button className="btn primary" disabled={busy} onClick={() => act('computer/start', 'Start')}>
+            <Play size={14} /> {busy ? 'Starting…' : 'Start computer'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div>
       <div className={`screen ${hasControl && running ? 'control' : ''}`}>
-        {running && info ? (
-          <VncCanvas agentId={agent.id} password={info.vncPassword} viewOnly={!hasControl} />
-        ) : (
-          <div className="screen-overlay">
-            <div className="col" style={{ alignItems: 'center' }}>
-              <MonitorOff size={28} />
-              <div>
-                {!info
-                  ? 'Checking the computer…'
-                  : info.state === 'starting'
-                    ? 'Starting the computer…'
-                    : info.state === 'unavailable'
-                      ? `Docker is not reachable: ${info.detail ?? ''}`
-                      : info.state === 'missing'
-                        ? `${agent.name}'s computer hasn't been created yet. It starts automatically when ${agent.name} needs it.`
-                        : `${agent.name}'s computer is off.`}
-              </div>
-              {info && (info.state === 'missing' || info.state === 'stopped') && (
-                <button className="btn primary" disabled={busy} onClick={() => act('computer/start', 'Start')}>
-                  <Play size={14} /> {busy ? 'Starting…' : 'Start computer'}
-                </button>
-              )}
-            </div>
-          </div>
+        {live ? !expanded && live : offline}
+        {live && !expanded && !hasControl && (
+          <button className="screen-open" onClick={() => setExpanded(true)} aria-label={`Expand ${agent.name}'s screen`}>
+            <span>
+              <Maximize2 size={14} /> Expand
+            </span>
+          </button>
         )}
       </div>
       {running && (
@@ -140,13 +152,10 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
           <button className={`btn ${hasControl ? 'primary' : ''} sm`} onClick={toggleControl} disabled={busy}>
             <Hand size={13} /> {hasControl ? 'Hand back to agent' : 'Take control'}
           </button>
-          <span className="small muted grow">
-            {hasControl
-              ? waitingForHuman
-                ? 'You are driving. Finish the step, then answer the request.'
-                : `You are driving; ${agent.name} is paused.`
-              : 'Watching live (view only)'}
-          </span>
+          <span className="small muted grow">{hint}</span>
+          <button className="btn sm icon" onClick={() => setExpanded(true)} aria-label="Expand the screen" title="Expand">
+            <Maximize2 size={13} />
+          </button>
           {!compact && (
             <>
               <button className="btn sm" disabled={busy} onClick={() => act('computer/stop', 'Stop')}>
@@ -165,6 +174,55 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
           )}
         </div>
       )}
+      {expanded && (
+        <ExpandedScreen agent={agent} onClose={() => setExpanded(false)}>
+          <div className="screen-full-bar">
+            <span className="small muted ellipsis">{running && hint}</span>
+            <span className="screen-full-name">
+              <Avatar member={agent} size={26} status />
+              <span className="ellipsis">{agent.name}</span>
+            </span>
+            <div className="screen-full-actions">
+              {running && (
+                <button className={`btn sm pill ${hasControl ? 'primary' : ''}`} onClick={toggleControl} disabled={busy}>
+                  <Hand size={13} /> {hasControl ? 'Hand back' : 'Take control'}
+                </button>
+              )}
+              <button className="icon-btn" data-autofocus onClick={() => setExpanded(false)} aria-label="Collapse the screen" title="Collapse">
+                <Minimize2 size={18} />
+              </button>
+            </div>
+          </div>
+          <div className="screen-stage">
+            <div className={`screen ${hasControl && running ? 'control' : ''}`}>{live ?? offline}</div>
+          </div>
+        </ExpandedScreen>
+      )}
     </div>
+  );
+}
+
+/** The screen filling the window, in the top layer like the shared modal. Escape collapses it, unless
+ * you have control and the screen has focus: then Escape goes to the computer. */
+function ExpandedScreen({ agent, onClose, children }: { agent: Agent; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current!;
+    dialog.showModal();
+    dialog.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+    return () => dialog.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="screen-full"
+      aria-label={`${agent.name}'s screen`}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+    >
+      {children}
+    </dialog>
   );
 }

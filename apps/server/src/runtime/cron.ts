@@ -90,7 +90,6 @@ export class CronScheduler {
       kind: 'schedule',
       text: lines.filter(Boolean).join('\n'),
       channelId,
-      taskNumber: null,
       depth: 0,
       initiator: event ? 'event' : 'schedule',
       readOnly: s.readOnly,

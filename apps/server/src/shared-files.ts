@@ -85,6 +85,25 @@ export function attachmentFor(sharedDir: string, ref: string): Attachment {
   return { path: toSharedRef(sharedDir, full), name: path.basename(full), size: st.size };
 }
 
+const SHARED_REF = /\/shared\/[^\s`'"<>()[\]{}*,;|]+/g;
+
+/**
+ * Mark every /shared path in old text (messages, task notes) that no longer exists, so an agent reading
+ * history doesn't send someone to a file that was deleted since.
+ */
+export function markMissingFiles(sharedDir: string, text: string): string {
+  return text.replace(SHARED_REF, (match) => {
+    const ref = match.replace(/[.:!?]+$/, ''); // sentence punctuation after the path
+    let exists = false;
+    try {
+      exists = !!realSharedPath(sharedDir, ref);
+    } catch {
+      // It leads outside /shared: not a file anyone can use.
+    }
+    return exists ? match : `${ref} (not found — deleted or moved)${match.slice(ref.length)}`;
+  });
+}
+
 /** Make a file name safe and readable: no folders, no control characters, nothing hidden. */
 export function cleanFileName(name: string): string {
   const base = path.basename(name.replace(/\\/g, '/')).replace(/[\u0000-\u001f<>:"|?*]/g, '_').trim();
@@ -143,6 +162,20 @@ export function saveUpload(sharedDir: string, dir: string, name: string, data: B
     }
     return { path: toSharedRef(sharedDir, full), size: data.length, modifiedAt: new Date().toISOString() };
   }
+}
+
+/** Delete one file in /shared. Only regular files: a link is never followed, and folders stay. Returns false if there is no such file. */
+export function deleteSharedFile(sharedDir: string, rel: string): boolean {
+  const full = sharedPath(sharedDir, rel);
+  if (full === path.resolve(sharedDir)) return false;
+  // The folder is checked where it really leads; the name itself is looked at, not followed.
+  const folder = realSharedPath(sharedDir, path.dirname(full));
+  if (!folder) return false;
+  const target = path.join(folder, path.basename(full));
+  const st = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (!st?.isFile()) return false;
+  fs.unlinkSync(target);
+  return true;
 }
 
 export function listShared(sharedDir: string, dir: string, limit = 1000): SharedFile[] {

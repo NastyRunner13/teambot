@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import {
   ACTIVE_RUN_STATUSES,
+  PROGRESS_TOOL,
   type Agent,
   type Approval,
   type Bootstrap,
@@ -12,14 +13,35 @@ import {
   type McpServerStatus,
   type Message,
   type Run,
+  type RunSummary,
   type Schedule,
   type SkillSummary,
-  type Task,
   type WsFrame,
 } from '@teambot/shared';
 import { api, whenSignedOut, wsUrl } from './api';
 
 const MAX_EVENTS = 800;
+
+export type PanelTab = 'details' | 'library' | 'computer';
+
+/** A page the right panel shows over the conversation's profile. */
+export type PanelView =
+  | { kind: 'thread'; rootId: string }
+  | { kind: 'run'; runId: string }
+  | { kind: 'routine'; id: string }
+  | { kind: 'routine-edit'; agentId: string; id: string | null }
+  | { kind: 'memory'; agentId: string }
+  | { kind: 'customize'; agentId: string };
+
+export interface PanelState {
+  open: boolean;
+  tab: PanelTab;
+  /** An agent shown instead of the conversation itself, e.g. one picked in a group chat. */
+  agentId: string | null;
+  view: PanelView | null;
+  /** The page `agentId` and `view` were opened on. Anywhere else the panel shows that page's own profile. */
+  at: string;
+}
 
 interface State {
   ready: boolean;
@@ -33,9 +55,12 @@ interface State {
   humans: Human[];
   agents: Agent[];
   channels: Channel[];
-  tasks: Task[];
+  /** Newest top-level message per channel, for the conversation list. */
+  lastMessages: Record<string, Message>;
   approvals: Approval[];
   runs: Record<string, Run>;
+  /** Runs conversations have shown work notes for, with their tool call counts. */
+  runSummaries: Record<string, RunSummary>;
   schedules: Schedule[];
   skills: SkillSummary[];
   secrets: string[];
@@ -45,19 +70,31 @@ interface State {
   messages: Record<string, Message[]>;
   /** Thread replies per root message id. */
   threads: Record<string, Message[]>;
+  /** Per conversation: what agents posted elsewhere while working in it, such as a message to a teammate. */
+  sent: Record<string, Message[]>;
   events: EventRecord[];
-  /** Agent whose computer is open in the side panel. */
-  dockAgentId: string | null;
-  /** Thread open in the side panel (it shares the slot with the computer dock). */
-  threadRootId: string | null;
+  panel: PanelState;
+  sidebarCollapsed: boolean;
+  /** A /shared file open in the preview dialog. */
+  preview: string | null;
   toast: { text: string; kind: 'info' | 'error' } | null;
 
   init(): Promise<void>;
   refresh(): Promise<void>;
   loadMessages(channelId: string): Promise<void>;
   loadThread(rootId: string): Promise<void>;
-  openDock(agentId: string | null): void;
-  openThread(rootId: string | null): void;
+  loadRunSummaries(ids: string[], force?: boolean): void;
+  /** Open the right panel, changing what it shows. */
+  showPanel(patch?: Partial<Pick<PanelState, 'tab' | 'agentId' | 'view'>>): void;
+  togglePanel(): void;
+  /** Close the page open in the panel, back to the profile. */
+  closeView(): void;
+  /** Watch an agent's computer in the panel. */
+  openDock(agentId: string): void;
+  openThread(rootId: string): void;
+  openRun(runId: string): void;
+  toggleSidebar(): void;
+  openFile(path: string | null): void;
   notify(text: string, kind?: 'info' | 'error'): void;
 }
 
@@ -69,8 +106,28 @@ const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
   return next;
 };
 
+// Layout choices are per browser; storage can be unavailable, and the app works without it.
+function remembered(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function remember(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* not remembered, still works */
+  }
+}
+
+/** The panel covers the chat instead of sitting beside it (see the 1100px breakpoint in styles.css). */
+export const overlayPanel = () => window.innerWidth <= 1100;
+
 let socket: WebSocket | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+const summariesLoading = new Set<string>();
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -82,9 +139,10 @@ export const useStore = create<State>((set, get) => ({
   humans: [],
   agents: [],
   channels: [],
-  tasks: [],
+  lastMessages: {},
   approvals: [],
   runs: {},
+  runSummaries: {},
   schedules: [],
   skills: [],
   secrets: [],
@@ -92,9 +150,12 @@ export const useStore = create<State>((set, get) => ({
   health: null,
   messages: {},
   threads: {},
+  sent: {},
   events: [],
-  dockAgentId: null,
-  threadRootId: null,
+  // Where the panel covers the chat (narrow windows) it starts closed; on wide ones it stays as you left it.
+  panel: { open: !overlayPanel() && (remembered('teambot-panel') ?? (window.innerWidth >= 1280 ? 'open' : 'closed')) === 'open', tab: 'details', agentId: null, view: null, at: '' },
+  sidebarCollapsed: remembered('teambot-sidebar') === 'collapsed',
+  preview: null,
   toast: null,
 
   async init() {
@@ -115,7 +176,7 @@ export const useStore = create<State>((set, get) => ({
         humans: b.humans,
         agents: b.agents,
         channels: b.channels,
-        tasks: b.tasks,
+        lastMessages: Object.fromEntries(b.lastMessages.map((m) => [m.channelId, m])),
         approvals: b.approvals,
         runs: Object.fromEntries(b.activeRuns.map((r) => [r.id, r])),
         schedules: b.schedules,
@@ -130,12 +191,19 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadMessages(channelId) {
-    const msgs = await api.get<Message[]>(`/channels/${channelId}/messages?limit=100`);
-    set((s) => {
-      const live = s.messages[channelId] ?? [];
-      const seen = new Set(msgs.map((m) => m.id));
-      return { messages: { ...s.messages, [channelId]: [...msgs, ...live.filter((m) => !seen.has(m.id))] } };
-    });
+    const [msgs, sent] = await Promise.all([
+      api.get<Message[]>(`/channels/${channelId}/messages?limit=100`),
+      api.get<Message[]>(`/channels/${channelId}/sent?limit=100`).catch(() => [] as Message[]),
+    ]);
+    // Keep what arrived live while these loaded.
+    const merge = (loaded: Message[], live: Message[] = []) => {
+      const seen = new Set(loaded.map((m) => m.id));
+      return [...loaded, ...live.filter((m) => !seen.has(m.id))];
+    };
+    set((s) => ({
+      messages: { ...s.messages, [channelId]: merge(msgs, s.messages[channelId]) },
+      sent: { ...s.sent, [channelId]: merge(sent, s.sent[channelId]) },
+    }));
   },
 
   async loadThread(rootId) {
@@ -147,12 +215,58 @@ export const useStore = create<State>((set, get) => ({
     });
   },
 
+  loadRunSummaries(ids, force = false) {
+    const have = get().runSummaries;
+    const missing = [...new Set(ids)].filter((id) => (force || !have[id]) && !summariesLoading.has(id));
+    if (!missing.length) return;
+    missing.forEach((id) => summariesLoading.add(id));
+    api
+      .get<RunSummary[]>(`/runs?ids=${missing.join(',')}`)
+      .then((list) => set((s) => ({ runSummaries: { ...s.runSummaries, ...Object.fromEntries(list.map((r) => [r.id, r])) } })))
+      .catch(() => {})
+      .finally(() => missing.forEach((id) => summariesLoading.delete(id)));
+  },
+
+  showPanel(patch = {}) {
+    if (!overlayPanel()) remember('teambot-panel', 'open');
+    const at = location.pathname;
+    set((s) => {
+      // What was open on another page doesn't carry over to this one.
+      const base = s.panel.at === at ? s.panel : { ...s.panel, agentId: null, view: null, at };
+      return { panel: { ...base, ...patch, open: true } };
+    });
+  },
+
+  togglePanel() {
+    const open = !get().panel.open;
+    if (!overlayPanel()) remember('teambot-panel', open ? 'open' : 'closed');
+    set((s) => ({ panel: { ...s.panel, open, view: open ? s.panel.view : null } }));
+  },
+
+  closeView() {
+    set((s) => ({ panel: { ...s.panel, view: null } }));
+  },
+
   openDock(agentId) {
-    set(agentId ? { dockAgentId: agentId, threadRootId: null } : { dockAgentId: null });
+    get().showPanel({ agentId, tab: 'computer', view: null });
   },
 
   openThread(rootId) {
-    set(rootId ? { threadRootId: rootId, dockAgentId: null } : { threadRootId: null });
+    get().showPanel({ view: { kind: 'thread', rootId } });
+  },
+
+  openRun(runId) {
+    get().showPanel({ view: { kind: 'run', runId } });
+  },
+
+  toggleSidebar() {
+    const collapsed = !get().sidebarCollapsed;
+    remember('teambot-sidebar', collapsed ? 'collapsed' : 'expanded');
+    set({ sidebarCollapsed: collapsed });
+  },
+
+  openFile(path) {
+    set({ preview: path });
   },
 
   notify(text, kind = 'info') {
@@ -186,12 +300,17 @@ whenSignedOut(() => useStore.setState({ signedOut: true }));
 /** Fold one server event into local state. */
 function apply(e: EventRecord) {
   const d = e.data as Record<string, any>;
+  let finishedRun: string | null = null;
   useStore.setState((s) => {
     const next: Partial<State> = { events: [...s.events.slice(-MAX_EVENTS + 1), e] };
 
     if (d.message && e.type === 'message.created') {
       const m = d.message as Message;
       const list = s.messages[m.channelId];
+      // An agent at work in one conversation posting in another: the one it works in notes it.
+      const from = m.runId ? (s.runs[m.runId] ?? s.runSummaries[m.runId])?.channelId : null;
+      const sent = from && from !== m.channelId ? s.sent[from] : undefined;
+      if (from && sent && !sent.some((x) => x.id === m.id)) next.sent = { ...s.sent, [from]: [...sent, m] };
       if (m.threadId) {
         const replies = s.threads[m.threadId];
         if (replies && !replies.some((x) => x.id === m.id)) next.threads = { ...s.threads, [m.threadId]: [...replies, m] };
@@ -202,23 +321,41 @@ function apply(e: EventRecord) {
             [m.channelId]: list.map((x) => (x.id === m.threadId ? { ...x, replyCount: (x.replyCount ?? 0) + 1, lastReplyAt: m.createdAt } : x)),
           };
         }
-      } else if (list && !list.some((x) => x.id === m.id)) {
-        next.messages = { ...s.messages, [m.channelId]: [...list, { ...m, replyCount: 0, lastReplyAt: null }] };
+      } else {
+        next.lastMessages = { ...s.lastMessages, [m.channelId]: m };
+        if (list && !list.some((x) => x.id === m.id)) next.messages = { ...s.messages, [m.channelId]: [...list, { ...m, replyCount: 0, lastReplyAt: null }] };
       }
     }
     if (d.channel) next.channels = upsert(s.channels, d.channel as Channel);
+    if (e.type === 'channel.deleted') {
+      const gone = d.channelId as string;
+      const { [gone]: _messages, ...messages } = s.messages;
+      const { [gone]: _last, ...lastMessages } = s.lastMessages;
+      next.channels = s.channels.filter((c) => c.id !== gone);
+      next.messages = messages;
+      next.lastMessages = lastMessages;
+      // Its routines now post in their agent's chat with the owner.
+      next.schedules = s.schedules.map((x) => (x.channelId === gone ? { ...x, channelId: null } : x));
+    }
     if (d.agent && e.type.startsWith('agent.')) next.agents = upsert(s.agents, d.agent as Agent);
     if (e.type === 'agent.status' && e.agentId) next.agents = s.agents.map((a) => (a.id === e.agentId ? { ...a, status: d.status } : a));
     if (e.type === 'agent.deleted') next.agents = s.agents.filter((a) => a.id !== d.agentId);
-    if (d.task) next.tasks = upsert(s.tasks, d.task as Task).sort((a, b) => a.number - b.number);
     if (e.type === 'approval.created') next.approvals = upsert(s.approvals, d.approval as Approval);
     if (e.type === 'approval.resolved' && d.approval) next.approvals = s.approvals.filter((a) => a.id !== d.approval.id);
     if (d.run) {
       const r = d.run as Run;
       const runs = { ...s.runs };
       if (ACTIVE_RUN_STATUSES.includes(r.status)) runs[r.id] = r;
-      else delete runs[r.id];
+      else {
+        delete runs[r.id];
+        finishedRun = r.id;
+      }
       next.runs = runs;
+      next.runSummaries = { ...s.runSummaries, [r.id]: { ...r, toolCalls: s.runSummaries[r.id]?.toolCalls ?? 0 } };
+    }
+    if (e.type === 'tool.checked' && e.runId && s.runSummaries[e.runId] && d.tool !== PROGRESS_TOOL) {
+      const r = s.runSummaries[e.runId];
+      next.runSummaries = { ...(next.runSummaries ?? s.runSummaries), [r.id]: { ...r, toolCalls: r.toolCalls + 1 } };
     }
     if (e.type === 'system.paused') next.pausedAll = true;
     if (e.type === 'system.resumed') next.pausedAll = false;
@@ -241,6 +378,8 @@ function apply(e: EventRecord) {
     }
     return next;
   });
+  // A finished run's exact count of actions comes from the server (events may have arrived before this page loaded).
+  if (finishedRun) useStore.getState().loadRunSummaries([finishedRun], true);
 }
 
 // ── selectors & helpers ────────────────────────────────────────────────
@@ -258,10 +397,16 @@ export function memberName(id: string | null | undefined): string {
 export function channelTitle(channel: Channel, meId: string | undefined): string {
   if (channel.kind === 'channel') return `#${channel.name}`;
   const others = channel.memberIds.filter((m) => m !== meId);
-  return others.map((m) => memberName(m)).join(', ') || 'Notes to self';
+  // A DM without me is between two others, e.g. agents working something out.
+  return others.map((m) => memberName(m)).join(meId && channel.memberIds.includes(meId) ? ', ' : ' ⇄ ') || 'Notes to self';
 }
 
 /** The active run for an agent, if any. */
 export function activeRunFor(runs: Record<string, Run>, agentId: string): Run | undefined {
   return Object.values(runs).find((r) => r.agentId === agentId);
+}
+
+/** The DM between me and an agent, once it exists. */
+export function dmWith(channels: Channel[], meId: string | undefined, agentId: string): Channel | undefined {
+  return channels.find((c) => c.kind === 'dm' && c.memberIds.length === 2 && c.memberIds.includes(agentId) && c.memberIds.includes(meId ?? ''));
 }

@@ -1,20 +1,16 @@
 import { AlertTriangle, Menu, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, Redirect, Route, Switch, useLocation } from 'wouter';
-import { Dock } from './components/Dock';
+import { FilePreviewDialog } from './components/FilePreview';
 import { Sidebar } from './components/Sidebar';
-import { ThreadPanel } from './components/ThreadPanel';
-import { useStore } from './store';
-import { ActivityView } from './views/ActivityView';
-import { AgentView } from './views/AgentView';
-import { ApprovalsView } from './views/ApprovalsView';
-import { ChannelView } from './views/ChannelView';
-import { FilesView } from './views/FilesView';
-import { SettingsView } from './views/SettingsView';
+import { useConversations } from './lib/conversations';
+import { overlayPanel, useStore } from './store';
+import { AppsView } from './views/AppsView';
+import { AgentChat, ChannelChat, Welcome } from './views/ChatView';
+import { NewChatView } from './views/NewChatView';
+import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from './views/SettingsView';
 import { JoinPage, SignInPage } from './views/SignIn';
 import { SearchView } from './views/SearchView';
-import { SkillsView } from './views/SkillsView';
-import { TasksView } from './views/TasksView';
 
 function HealthBanner() {
   const health = useStore((s) => s.health);
@@ -40,15 +36,18 @@ function HealthBanner() {
         {problems.map((p, i) => (
           <div key={i}>{p}</div>
         ))}
-        <Link href="/settings">Check settings</Link>
+        <Link href="/settings/system">Check settings</Link>
       </div>
     </div>
   );
 }
 
+/** The most recent conversation, or a welcome when there are no agents yet. */
 function Home() {
-  const general = useStore((s) => s.channels.find((c) => c.kind === 'channel' && c.name === 'general') ?? s.channels.find((c) => c.kind === 'channel'));
-  return general ? <Redirect to={`/c/${general.id}`} replace /> : null;
+  const conversations = useConversations();
+  const hasAgents = useStore((s) => s.agents.length > 0);
+  if (!hasAgents) return <Welcome />;
+  return conversations[0] ? <Redirect to={conversations[0].href} replace /> : <Welcome />;
 }
 
 export function App() {
@@ -57,16 +56,19 @@ export function App() {
   const init = useStore((s) => s.init);
   const ready = useStore((s) => s.ready);
   const error = useStore((s) => s.error);
-  const dockAgentId = useStore((s) => s.dockAgentId);
-  const threadRootId = useStore((s) => s.threadRootId);
   const toast = useStore((s) => s.toast);
   const signedOut = useStore((s) => s.signedOut);
-  const teamMode = useStore((s) => s.teamMode);
+  const collapsed = useStore((s) => s.sidebarCollapsed);
+  const panelOpen = useStore((s) => s.panel.open);
 
   useEffect(() => {
     void init();
   }, [init]);
   useEffect(() => setNavigationOpen(false), [location]);
+  // Where the panel covers the chat, going to another page closes it, unless it was just opened for that page.
+  useEffect(() => {
+    useStore.setState((s) => (overlayPanel() && s.panel.open && s.panel.at !== location ? { panel: { ...s.panel, open: false, view: null } } : {}));
+  }, [location]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => event.key === 'Escape' && setNavigationOpen(false);
     window.addEventListener('keydown', close);
@@ -77,38 +79,50 @@ export function App() {
   if (join) return <JoinPage token={decodeURIComponent(join[1])} />;
   if (signedOut) return <SignInPage />;
   if (!ready) {
-    return <div className="center-fill muted">{error ? `Can't reach the TeamBot server: ${error}` : 'Loading TeamBot…'}</div>;
+    return <div className="center-fill muted boot">{error ? `Can't reach the TeamBot server: ${error}` : 'Loading TeamBot…'}</div>;
   }
 
   return (
-    <div className={`app ${navigationOpen ? 'navigation-open' : ''}`}>
+    <div className={`app ${collapsed ? 'sidebar-collapsed' : ''} ${navigationOpen ? 'navigation-open' : ''} ${panelOpen ? 'panel-open' : ''}`}>
       <div className="mobile-bar">
-        <button className="btn ghost icon" aria-label={navigationOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={navigationOpen} aria-controls="workspace-navigation" onClick={() => setNavigationOpen(!navigationOpen)}>
+        <button className="icon-btn" aria-label={navigationOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={navigationOpen} aria-controls="workspace-navigation" onClick={() => setNavigationOpen(!navigationOpen)}>
           {navigationOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
-        <strong>TeamBot</strong><span className="muted small">{teamMode ? 'Team workspace' : 'Your workspace'}</span>
+        <strong>TeamBot</strong>
       </div>
       <Sidebar />
       <main className="main">
         <HealthBanner />
         <Switch>
           <Route path="/" component={Home} />
-          <Route path="/c/:id">{(p) => <ChannelView id={p.id} />}</Route>
-          <Route path="/agents/:id">{(p) => <AgentView id={p.id} />}</Route>
-          <Route path="/tasks" component={TasksView} />
-          <Route path="/approvals" component={ApprovalsView} />
-          <Route path="/activity" component={ActivityView} />
-          <Route path="/files" component={FilesView} />
-          <Route path="/skills">{() => <SkillsView />}</Route>
+          <Route path="/new" component={NewChatView} />
+          <Route path="/c/:id">{(p) => <ChannelChat id={p.id} />}</Route>
+          <Route path="/agents/:id">{(p) => <AgentChat id={p.id} />}</Route>
+          <Route path="/apps">{() => <AppsView page={{ kind: 'browse' }} />}</Route>
+          <Route path="/apps/installed">{() => <AppsView page={{ kind: 'installed' }} />}</Route>
+          <Route path="/apps/custom">{() => <AppsView page={{ kind: 'custom' }} />}</Route>
+          <Route path="/apps/mcp/:name">{(p) => <AppsView page={{ kind: 'server', name: decodeURIComponent(p.name) }} />}</Route>
+          <Route path="/apps/:id">{(p) => <AppsView page={{ kind: 'app', id: p.id }} />}</Route>
+          <Route path="/skills">{() => <AppsView page={{ kind: 'skills' }} />}</Route>
+          <Route path="/skills/:name">{(p) => <AppsView page={{ kind: 'skills', skill: p.name }} />}</Route>
+          <Route path="/files">{() => <AppsView page={{ kind: 'files' }} />}</Route>
           <Route path="/search" component={SearchView} />
-          <Route path="/skills/:name">{(p) => <SkillsView name={p.name} />}</Route>
-          <Route path="/settings" component={SettingsView} />
+          <Route path="/settings">{() => <SettingsView section="general" />}</Route>
+          <Route path="/settings/:section">
+            {(p) => (SETTINGS_SECTIONS.includes(p.section as SettingsSection) ? <SettingsView section={p.section as SettingsSection} /> : <Redirect to="/settings" replace />)}
+          </Route>
+          {/* Pages that are now part of the chats: old links land on the latest one. */}
+          {['/tasks', '/approvals', '/activity'].map((old) => (
+            <Route key={old} path={old}>
+              <Redirect to="/" replace />
+            </Route>
+          ))}
           <Route>
             <div className="center-fill muted">Page not found.</div>
           </Route>
         </Switch>
       </main>
-      {threadRootId ? <ThreadPanel key={threadRootId} rootId={threadRootId} /> : dockAgentId ? <Dock agentId={dockAgentId} /> : <div />}
+      <FilePreviewDialog />
       {toast && <div role="status" className={`toast ${toast.kind === 'error' ? 'error' : ''}`}>{toast.text}</div>}
     </div>
   );

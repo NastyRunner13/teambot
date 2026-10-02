@@ -32,7 +32,7 @@ export const DEFAULT_POLICY_YAML = `# TeamBot action policy
 #                If it fails at run time (e.g. a missing key), deny/handoff/ask/review rules match and allow rules don't.
 
 defaults:
-  internal: allow   # team tools: messages, tasks
+  internal: allow   # team tools: messages, progress
   read: allow       # looking at things: page snapshots, reading files, browsing
   write: allow      # changing things inside the agent's own computer
   external: ask     # tools that act outside the computer (MCP servers) or add agents

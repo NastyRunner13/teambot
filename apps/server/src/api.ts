@@ -7,14 +7,14 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, TASK_STATUSES, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type Schedule, type TaskStatus, type WsFrame } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
 import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
 import { addAgent, nameTaken, removeAgent } from './runtime/helpers.js';
 import { routineSecret } from './runtime/triggers.js';
-import { MAX_UPLOAD_BYTES, listShared, openSharedFile, saveUpload, sharedPath as toSharedPath } from './shared-files.js';
+import { MAX_UPLOAD_BYTES, deleteSharedFile, listShared, openSharedFile, realSharedPath, saveUpload, sharedPath as toSharedPath, toSharedRef } from './shared-files.js';
 import { SKILL_NAME_RE } from './skills.js';
 import { MAX_MEMORY_BYTES } from './memory.js';
 import { TOKEN_SECRET as TELEGRAM_TOKEN } from './bridges/telegram.js';
@@ -22,7 +22,6 @@ import { APP_TOKEN as SLACK_APP_TOKEN, BOT_TOKEN as SLACK_BOT_TOKEN, SLACK_MANIF
 import { RESERVED_PREFIX, isReserved } from './vault.js';
 import { search } from './search.js';
 import { NAME_RE, errorMessage } from './util.js';
-import { humanActor } from './workspace.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -293,21 +292,24 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   // ── bootstrap & health ───────────────────────────────────────────────
   server.get('/api/health', health);
 
-  server.get('/api/bootstrap', async (req): Promise<Bootstrap> => ({
-    me: me(req),
-    teamMode: app.auth.teamMode,
-    humans: store.listHumans(),
-    agents: store.listAgents(),
-    channels: store.listChannels().filter((c) => workspace.canSee(c, me(req).id)),
-    tasks: store.listTasks(),
-    approvals: store.listApprovals({ status: 'pending' }).filter((a) => channelVisible(a.channelId, me(req).id) && runVisible(a.runId, me(req).id)),
-    activeRuns: store.listRuns({ statuses: ACTIVE_RUN_STATUSES, limit: 200 }).filter((r) => channelVisible(r.channelId, me(req).id)),
-    schedules: store.listSchedules().map(presentSchedule),
-    skills: app.skills.list(),
-    secrets: vault.agentNames(),
-    pausedAll: runtime.pausedAll,
-    health: await health(),
-  }));
+  server.get('/api/bootstrap', async (req): Promise<Bootstrap> => {
+    const channels = store.listChannels().filter((c) => workspace.canSee(c, me(req).id));
+    return {
+      me: me(req),
+      teamMode: app.auth.teamMode,
+      humans: store.listHumans(),
+      agents: store.listAgents(),
+      channels,
+      lastMessages: channels.flatMap((c) => store.listTopLevel(c.id, { limit: 1 })),
+      approvals: store.listApprovals({ status: 'pending' }).filter((a) => channelVisible(a.channelId, me(req).id) && runVisible(a.runId, me(req).id)),
+      activeRuns: store.listRuns({ statuses: ACTIVE_RUN_STATUSES, limit: 200 }).filter((r) => channelVisible(r.channelId, me(req).id)),
+      schedules: store.listSchedules().map(presentSchedule),
+      skills: app.skills.list(),
+      secrets: vault.agentNames(),
+      pausedAll: runtime.pausedAll,
+      health: await health(),
+    };
+  });
 
   server.patch('/api/me', async (req) => {
     const { name } = parse(z.object({ name: z.string().trim().min(1).max(40) }), req.body);
@@ -406,6 +408,30 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   server.get<{ Params: { id: string }; Querystring: { limit?: string } }>('/api/agents/:id/runs', async (req) =>
     store.listRuns({ agentId: agentOr404(req.params.id).id, limit: Number(req.query.limit ?? 30) }).filter((r) => channelVisible(r.channelId, me(req).id)),
   );
+
+  /** Files attached to these messages that are still in /shared: newest first, each path once. */
+  const libraryOf = (messages: Message[]): LibraryItem[] => {
+    const seen = new Set<string>();
+    const items: LibraryItem[] = [];
+    for (const m of messages) {
+      for (const a of m.attachments) {
+        if (seen.has(a.path)) continue;
+        seen.add(a.path);
+        let exists = false;
+        try {
+          exists = !!realSharedPath(cfg.sharedDir, a.path);
+        } catch {
+          // It leads outside /shared now: leave it out.
+        }
+        if (exists) items.push({ ...a, messageId: m.id, channelId: m.channelId, authorId: m.authorId, createdAt: m.createdAt });
+      }
+    }
+    return items;
+  };
+  server.get<{ Params: { id: string } }>('/api/agents/:id/library', async (req) =>
+    libraryOf(store.listWithAttachments({ authorId: agentOr404(req.params.id).id }).filter((m) => channelVisible(m.channelId, me(req).id))),
+  );
+  server.get<{ Params: { id: string } }>('/api/channels/:id/library', async (req) => libraryOf(store.listWithAttachments({ channelId: channelFor(req, req.params.id).id })));
 
   // ── computers ────────────────────────────────────────────────────────
   server.get<{ Params: { id: string } }>('/api/agents/:id/computer', async (req) => {
@@ -508,6 +534,12 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     bus.emit('channel.updated', { actorId: me(req).id, channelId: req.params.id }, { channel });
     return channel;
   });
+  server.delete<{ Params: { id: string } }>('/api/channels/:id', async (req) => {
+    const channel = channelFor(req, req.params.id);
+    if (channel.kind === 'dm') throw new HttpError(409, "A direct message can't be deleted");
+    workspace.deleteChannel(channel.id, me(req).id);
+    return { ok: true };
+  });
   server.post<{ Params: { id: string } }>('/api/channels/:id/members', async (req) => {
     const { memberId } = parse(z.object({ memberId: z.string() }), req.body);
     editableChannel(req, req.params.id);
@@ -528,6 +560,11 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   server.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>('/api/channels/:id/messages', async (req) =>
     store.listTopLevel(channelFor(req, req.params.id).id, { before: req.query.before, limit: Math.min(Number(req.query.limit ?? 60), 200) }),
   );
+  server.get<{ Params: { id: string }; Querystring: { limit?: string } }>('/api/channels/:id/sent', async (req) =>
+    store
+      .listSentElsewhere(channelFor(req, req.params.id).id, { limit: Math.min(Number(req.query.limit ?? 60), 200) })
+      .filter((m) => channelVisible(m.channelId, me(req).id)),
+  );
   server.post<{ Params: { id: string } }>('/api/channels/:id/messages', async (req) => {
     const input = parse(
       z.object({ text: z.string().default(''), threadId: z.string().nullable().optional(), attachments: z.array(z.string()).max(20).optional() }),
@@ -544,36 +581,12 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     return { root: store.getMessage(rootId), replies: store.listThread(rootId) };
   });
 
-  // ── tasks ────────────────────────────────────────────────────────────
-  server.get('/api/tasks', async () => store.listTasks());
-  server.post('/api/tasks', async (req) => {
-    const input = parse(
-      z.object({
-        title: z.string().min(1),
-        description: z.string().optional(),
-        assigneeId: z.string().nullable().optional(),
-        dependsOn: z.array(z.number().int()).optional(),
-        channelId: z.string().nullable().optional(),
-      }),
-      req.body,
-    );
-    return workspace.createTask(input, humanActor(me(req).id));
-  });
-  server.patch<{ Params: { number: string } }>('/api/tasks/:number', async (req) => {
-    const input = parse(
-      z.object({
-        status: z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]]).optional(),
-        assigneeId: z.string().nullable().optional(),
-        note: z.string().optional(),
-        title: z.string().optional(),
-        description: z.string().optional(),
-      }),
-      req.body,
-    );
-    return workspace.updateTask(Number(req.params.number), input, humanActor(me(req).id));
-  });
-
   // ── runs ─────────────────────────────────────────────────────────────
+  // Summaries for the work notes conversations show above an agent's reply: /api/runs?ids=a,b
+  server.get<{ Querystring: { ids?: string } }>('/api/runs', async (req) => {
+    const ids = [...new Set((req.query.ids ?? '').split(',').filter(Boolean))].slice(0, 200);
+    return store.runSummaries(ids).filter((r) => channelVisible(r.channelId, me(req).id));
+  });
   server.get<{ Params: { id: string } }>('/api/runs/:id', async (req) => {
     const run = store.getRun(req.params.id);
     if (!run || !channelVisible(run.channelId, me(req).id)) throw new HttpError(404, 'run not found');
@@ -672,17 +685,33 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   const ConnectInput = z.object({ origin: z.string().url().optional() });
 
   server.get('/api/connectors', async () => app.mcp.status());
+  // A connector that takes a pasted token (an API key or personal access token) instead of an OAuth sign-in.
+  const TokenInput = z.object({ header: z.string().trim().min(1).max(64), prefix: z.string().max(32).default(''), value: z.string().min(1).max(4096) });
   server.post('/api/connectors', async (req) => {
-    const input = parse(ConnectInput.extend({ name: z.string().trim().toLowerCase(), url: z.string().trim().min(1) }), req.body);
+    const input = parse(ConnectInput.extend({ name: z.string().trim().toLowerCase(), url: z.string().trim().min(1), token: TokenInput.optional() }), req.body);
     let connector;
     try {
-      connector = app.mcp.addConnector(input.name, input.url);
+      connector = app.mcp.addConnector(input.name, input.url, input.token && { header: input.token.header, prefix: input.token.prefix });
+      if (input.token) app.mcp.setToken(connector.name, input.token.value);
     } catch (err) {
+      if (connector) await app.mcp.removeConnector(connector.name);
       throw new HttpError(400, errorMessage(err));
     }
     const { authUrl } = await app.mcp.connect(connector.name, signInOrigin(input.origin));
     bus.emit('connector.added', { actorId: me(req).id }, { name: connector.name, url: connector.url, servers: app.mcp.status() });
     return { authUrl, servers: app.mcp.status() };
+  });
+  server.put<{ Params: { name: string } }>('/api/connectors/:name/token', async (req) => {
+    const { value } = parse(z.object({ value: z.string().min(1).max(4096) }), req.body);
+    if (!app.mcp.connectors().some((c) => c.name === req.params.name)) throw new HttpError(404, 'connector not found');
+    try {
+      app.mcp.setToken(req.params.name, value);
+    } catch (err) {
+      throw new HttpError(400, errorMessage(err));
+    }
+    await app.mcp.connect(req.params.name);
+    bus.emit('connector.updated', { actorId: me(req).id }, { name: req.params.name, change: 'token_updated', servers: app.mcp.status() });
+    return { servers: app.mcp.status() };
   });
   server.post<{ Params: { name: string } }>('/api/connectors/:name/connect', async (req) => {
     const { origin } = parse(ConnectInput, req.body ?? {});
@@ -702,6 +731,12 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     }
     bus.emit('connector.removed', { actorId: me(req).id }, { name, servers: app.mcp.status() });
     return app.mcp.status();
+  });
+  // What a connected server offers. Members may look (Connect apps is readable for everyone), so it isn't under /api/connectors.
+  server.get<{ Params: { name: string } }>('/api/mcp-servers/:name/tools', async (req) => {
+    const tools = app.mcp.tools(req.params.name);
+    if (!tools) throw new HttpError(404, 'MCP server not found');
+    return tools;
   });
   server.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>('/api/connectors/callback', async (req, reply) => {
     const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -1002,6 +1037,12 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     const file = inShared(() => saveUpload(cfg.sharedDir, dir, name, req.body as Buffer));
     bus.emit('file.uploaded', { actorId: me(req).id }, { file });
     return file;
+  });
+  server.delete<{ Querystring: { path?: string } }>('/api/shared/file', async (req) => {
+    const rel = req.query.path ?? '';
+    if (!inShared(() => deleteSharedFile(cfg.sharedDir, rel))) throw new HttpError(404, 'file not found');
+    bus.emit('file.deleted', { actorId: me(req).id }, { path: toSharedRef(cfg.sharedDir, sharedPath(rel)) });
+    return { ok: true };
   });
   const TYPES: Record<string, string> = {
     '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8',

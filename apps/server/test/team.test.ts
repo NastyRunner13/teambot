@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/api.js';
@@ -95,6 +97,16 @@ describe('team mode', () => {
     expect((await bob.call('GET', '/api/search?q=secret')).json().messages).toEqual([]);
     expect((await alice.call('GET', '/api/search?q=secret')).json().messages).toHaveLength(1);
     expect((await bob.call('GET', '/api/events?types=message.created')).json().map((e: { channelId: string }) => e.channelId)).not.toContain(dm.id);
+    // Nor do its preview, or the files the agent shared there, reach anyone else.
+    fs.mkdirSync(app.cfg.sharedDir, { recursive: true });
+    fs.writeFileSync(path.join(app.cfg.sharedDir, 'plan.md'), '# Plan');
+    app.workspace.postMessage({ channelId: dm.id, authorId: writer.id, text: 'Here is the plan', attachments: ['/shared/plan.md'], route: false });
+    const previews = (who: typeof bob) => who.call('GET', '/api/bootstrap').then((r) => r.json().lastMessages.map((m: { channelId: string }) => m.channelId));
+    expect(await previews(bob)).not.toContain(dm.id);
+    expect(await previews(alice)).toContain(dm.id);
+    expect((await bob.call('GET', `/api/agents/${writer.id}/library`)).json()).toEqual([]);
+    expect((await alice.call('GET', `/api/agents/${writer.id}/library`)).json()).toHaveLength(1);
+    expect((await bob.call('GET', `/api/channels/${dm.id}/library`)).statusCode).toBe(404);
 
     // Members can work but not change workspace settings.
     expect((await bob.call('PUT', '/api/secrets/GITHUB_TOKEN', { value: 'x' })).statusCode).toBe(403);

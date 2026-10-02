@@ -10,8 +10,9 @@ RUN npx tsc -p tsconfig.json && npm prune --omit=dev --no-audit --no-fund
 
 FROM node:22-bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
+# hsetroot: without a wallpaper setter, fluxbox's fbsetbg opens an error window on every start.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      chromium xvfb x11vnc x11-utils fluxbox xterm supervisor sudo xdotool scrot iptables \
+      chromium xvfb x11vnc x11-utils fluxbox hsetroot xterm supervisor sudo xdotool scrot iptables \
       ca-certificates curl wget git jq unzip zip procps less nano \
       python3 python3-pip python3-venv \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \

@@ -9,11 +9,24 @@ import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import { DEFAULT_POLICY_YAML } from '../src/policy.js';
-import { McpManager, connectorSecret } from '../src/tools/mcp.js';
+import { McpManager, connectorSecret, connectorTokenSecret } from '../src/tools/mcp.js';
 import { addAgent, general, testApp } from './helpers.js';
+
+async function serveNotes(req: http.IncomingMessage, res: http.ServerResponse, raw: string) {
+  if (req.method !== 'POST') {
+    res.writeHead(405);
+    return res.end();
+  }
+  const mcp = new McpServer({ name: 'notes', version: '1.0.0' });
+  mcp.registerTool('add_note', { description: 'Add a note', inputSchema: { text: z.string() } }, async ({ text }) => ({ content: [{ type: 'text', text: `Saved note: ${text}` }] }));
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  await mcp.connect(transport);
+  return transport.handleRequest(req, res, JSON.parse(raw));
+}
 
 /** A remote MCP server behind OAuth (discovery, dynamic client registration, PKCE, refresh), like Notion's or Linear's. */
 async function fakeService() {
+  const pat = { value: 'ghp_first-token-1234' };
   const codes = new Map<string, { challenge: string; redirect: string }>();
   const access = new Set<string>();
   const refresh = new Set<string>();
@@ -73,20 +86,20 @@ async function fakeService() {
         if (!grant || grant.challenge !== challenge || grant.redirect !== form.get('redirect_uri')) return json(400, { error: 'invalid_grant' });
         return json(200, issue());
       }
+      case '/pat': {
+        // A server that takes a personal access token instead of OAuth, like GitHub's.
+        if (req.headers.authorization !== `Bearer ${pat.value}`) {
+          res.writeHead(401);
+          return res.end();
+        }
+        return serveNotes(req, res, raw);
+      }
       case '/mcp': {
         if (!access.has(req.headers.authorization?.replace(/^Bearer /, '') ?? '')) {
           res.writeHead(401, { 'www-authenticate': `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"` });
           return res.end();
         }
-        if (req.method !== 'POST') {
-          res.writeHead(405);
-          return res.end();
-        }
-        const mcp = new McpServer({ name: 'notes', version: '1.0.0' });
-        mcp.registerTool('add_note', { description: 'Add a note', inputSchema: { text: z.string() } }, async ({ text }) => ({ content: [{ type: 'text', text: `Saved note: ${text}` }] }));
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-        await mcp.connect(transport);
-        return transport.handleRequest(req, res, JSON.parse(raw));
+        return serveNotes(req, res, raw);
       }
     }
     res.writeHead(404);
@@ -97,6 +110,7 @@ async function fakeService() {
   return {
     base,
     stats,
+    pat,
     /** Access tokens expire; refresh tokens still work. */
     expireAccess: () => access.clear(),
     /** The person revoked TeamBot's access at the service. */
@@ -188,6 +202,60 @@ describe('connectors', () => {
     expect(app.vault.get(connectorSecret('notes'))).toBeUndefined();
     expect(app.store.getAgent(scribe.id)!.mcpServers).toEqual([]);
     expect(app.mcp.status()).toEqual([]);
+    await server.close();
+  });
+
+  it('connects with a pasted token, keeps it secret, and asks for a new one when it stops working', async () => {
+    const t = testApp();
+    current = t.app;
+    const { app, models, owner } = t;
+    app.runtime.start();
+    service = await fakeService();
+    const server = await buildServer(app);
+    const add = (value: string) =>
+      server.inject({ method: 'POST', url: '/api/connectors', payload: { name: 'hub', url: `${service!.base}/pat`, token: { header: 'Authorization', prefix: 'Bearer ', value } } });
+
+    // A token that is too short is refused, and nothing is left behind.
+    expect((await add('short')).json().error).toMatch(/whole token/);
+    expect(app.mcp.connectors()).toEqual([]);
+
+    const added = await add(service.pat.value);
+    expect(added.json().authUrl).toBeUndefined();
+    expect(added.json().servers).toEqual([expect.objectContaining({ name: 'hub', connected: true, tools: 1, usesToken: true, needsSignIn: false })]);
+    expect((await server.inject({ method: 'GET', url: '/api/mcp-servers/hub/tools' })).json()).toEqual([{ name: 'add_note', description: 'Add a note' }]);
+    // The token is a reserved secret of its own, so agents can't use it and tool output never shows it.
+    expect(app.vault.get(connectorTokenSecret('hub'))).toBe(service.pat.value);
+    expect(app.vault.agentNames()).toEqual([]);
+    expect(app.vault.redact(`echo ${service.pat.value}`)).not.toContain(service.pat.value);
+
+    // After a restart the saved token is used.
+    const restarted = new McpManager('none.json', app.vault, app.store, app.bus, 'http://localhost:8787');
+    await restarted.start();
+    expect(restarted.status()).toEqual([expect.objectContaining({ name: 'hub', connected: true, usesToken: true })]);
+    await restarted.stop();
+
+    // The token is revoked at the service: the agent hears a human must step in, and the app asks for a new token.
+    const scribe = addAgent(app, 'Scribe');
+    app.store.updateAgent(scribe.id, { mcpServers: ['hub'] });
+    app.policy.update(DEFAULT_POLICY_YAML.replace('\nrules:\n', '\nrules:\n  - name: Hub is fine\n    tools: [mcp__hub__*]\n    action: allow\n\n'), owner.id);
+    service.pat.value = 'ghp_second-token-5678';
+    models.script('test/scribe', [callTool('mcp__hub__add_note', { text: 'x' }), say('Could not.')]);
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Scribe note "x"' });
+    await app.runtime.idle();
+    expect(String(app.store.listEvents({ types: ['tool.finished'] })[0].data.preview)).toContain('needs a human to sign in again');
+    expect(app.mcp.status()).toEqual([expect.objectContaining({ name: 'hub', connected: false, needsSignIn: true, error: expect.stringMatching(/new one/) })]);
+
+    // A wrong token is reported as such; the right one reconnects.
+    const put = (value: string) => server.inject({ method: 'PUT', url: '/api/connectors/hub/token', payload: { value } });
+    expect((await put('ghp_wrong-token-0000')).json().servers).toEqual([expect.objectContaining({ connected: false, error: expect.stringMatching(/didn't accept the token/) })]);
+    expect((await put(service.pat.value)).json().servers).toEqual([expect.objectContaining({ connected: true })]);
+
+    // Removing it deletes the token too.
+    await server.inject({ method: 'DELETE', url: '/api/connectors/hub' });
+    expect(app.vault.get(connectorTokenSecret('hub'))).toBeUndefined();
+    // OAuth connectors don't take tokens.
+    await app.mcp.addConnector('notes', `${service.base}/mcp`);
+    expect(() => app.mcp.setToken('notes', 'ghp_whatever-1234')).toThrow(/not with a token/);
     await server.close();
   });
 

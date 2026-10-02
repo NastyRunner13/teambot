@@ -1,16 +1,11 @@
-// Agents joining and leaving the team, and short-lived helpers.
-// A helper is an agent another agent starts for one task, so independent pieces of work run in parallel. It
-// inherits its parent's model, skills, MCP servers, network allowlist and computer setup; it spends from its
-// parent's budget; and it is removed (computer included) once its task is done or cancelled. Its messages,
-// runs and audit trail stay.
-import { ACTIVE_RUN_STATUSES, type Agent, type Run, type Task } from '@teambot/shared';
+// Agents joining and leaving the team, plus completion and cleanup of legacy helpers.
+// New helpers cannot be spawned. Existing ones may finish and report to their parent after an upgrade;
+// their runs, audit trail and shared budget accounting stay intact.
+import { ACTIVE_RUN_STATUSES, type Agent, type Run } from '@teambot/shared';
 import type { App } from '../app.js';
 import type { Store } from '../store.js';
 import { errorMessage } from '../util.js';
 import { routineSecret } from './triggers.js';
-
-export const MAX_HELPERS = 5;
-const OPEN_TASK = new Set(['todo', 'in_progress', 'blocked']);
 
 const AVATARS = ['🦊', '🐙', '🦉', '🐝', '🦄', '🐬', '🦁', '🐢', '🦜', '🐼', '🐧', '🦋'];
 const COLORS = ['#7c5cff', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#8b5cf6'];
@@ -22,7 +17,7 @@ export function nameTaken(app: App, name: string): boolean {
   return !!app.store.getAgentByName(name) || app.store.listHumans().some((h) => h.name.toLowerCase() === name.toLowerCase());
 }
 
-/** Add a permanent agent to the team and to #general. `data` goes on the agent.created event. */
+/** Add a permanent agent to the team and to #general, if it hasn't been deleted. `data` goes on the agent.created event. */
 export function addAgent(app: App, input: NewAgent, actorId: string, data: Record<string, unknown> = {}): Agent {
   const { store, bus, workspace } = app;
   const n = store.listAgents().length;
@@ -55,62 +50,55 @@ export class Helpers {
     return this.app.store.listAgents().filter((a) => a.parentId === parentId);
   }
 
-  private freeName(parent: Agent): string {
-    const base = parent.name.slice(0, 26);
-    for (let n = 1; ; n++) {
-      const name = `${base}-h${n}`;
-      if (!this.app.store.getAgentByName(name)) return name;
-    }
+  /** A helper's reply is its result: it goes to the agent that started it, for the conversation it worked in. */
+  report(helper: Agent, run: Run, text: string) {
+    const { store, bus } = this.app;
+    const parent = helper.parentId ? store.getAgent(helper.parentId) : undefined;
+    if (!parent) return;
+    store.addInbox({
+      agentId: parent.id,
+      kind: 'helper',
+      text: `Your helper ${helper.name} reports:\n${text}`,
+      channelId: run.channelId,
+      threadId: run.threadId,
+      depth: run.depth,
+      initiator: run.initiator,
+    });
+    bus.emit('helper.reported', { agentId: helper.id, runId: run.id, channelId: run.channelId }, { parentId: parent.id, text: text.slice(0, 2000) });
   }
 
-  /** Start one helper per task, each with its own task on the board (assigned to it, created by the parent). */
-  spawn(parent: Agent, run: Run, specs: { title: string; task: string }[], model?: string): { helper: Agent; task: Task }[] {
-    const { store, workspace, bus } = this.app;
-    if (parent.parentId) throw new Error('Helpers cannot start helpers of their own.');
-    const busy = this.of(parent.id).length;
-    if (busy + specs.length > MAX_HELPERS) throw new Error(`At most ${MAX_HELPERS} helpers at once; ${busy} are still working.`);
-    const started: { helper: Agent; task: Task }[] = [];
-    for (const spec of specs) {
-      const helper = store.createAgent({
-        name: this.freeName(parent),
-        role: `Helper of ${parent.name}`,
-        instructions: parent.instructions,
-        model: model?.trim() || parent.model,
-        avatar: parent.avatar,
-        color: parent.color,
-        mcpServers: parent.mcpServers,
-        skills: parent.skills,
-        setupScript: parent.setupScript,
-        computerImage: parent.computerImage,
-        desktop: parent.desktop,
-        network: parent.network,
-        parentId: parent.id,
-      });
-      bus.emit('agent.created', { actorId: parent.id, agentId: helper.id }, { agent: helper, parentId: parent.id });
-      if (run.channelId) workspace.addMember(run.channelId, helper.id, parent.id);
-      const task = workspace.createTask(
-        { title: spec.title, description: spec.task, assigneeId: helper.id, channelId: run.channelId },
-        { id: parent.id, depth: run.depth, initiator: run.initiator, runId: run.id },
-      );
-      started.push({ helper, task });
-    }
-    return started;
+  /** Whether some of this agent's helpers are still at work; their results wait until all of them are done. */
+  busy(parentId: string): boolean {
+    return this.of(parentId).length > 0;
   }
 
-  /** A helper whose work is over (no open task, nothing running or waiting) is removed. */
-  async retireIfDone(agentId: string): Promise<boolean> {
+  /** After a helper's run: once it has nothing left to do it is removed, telling its parent if it never reported. */
+  async finish(agentId: string): Promise<boolean> {
     const { store } = this.app;
     const helper = store.getAgent(agentId);
     if (!helper?.parentId) return false;
     if (store.listRuns({ agentId, statuses: ACTIVE_RUN_STATUSES, limit: 1 }).length) return false;
     if (store.pendingInbox(agentId).length) return false;
-    if (store.listTasks().some((t) => t.assigneeId === agentId && OPEN_TASK.has(t.status))) return false;
+    const last = store.listRuns({ agentId, limit: 1 })[0];
+    if (last && !store.listEvents({ agentId, types: ['helper.reported'], limit: 1 }).length) {
+      this.report(helper, last, last.status === 'cancelled' ? '(It was stopped before it finished.)' : '(It finished without a result.)');
+    }
     await removeAgent(this.app, helper, null);
     return true;
   }
 
-  /** Fallback for helpers whose task was closed by someone else while they were idle. */
+  /** The parent's work in a conversation was stopped: its helpers there go, and so do results nobody will read. */
+  async dismiss(parentId: string, channelId: string | null, actorId: string | null) {
+    const { store } = this.app;
+    for (const helper of this.of(parentId)) {
+      const where = store.pendingInbox(helper.id)[0]?.channelId ?? store.listRuns({ agentId: helper.id, limit: 1 })[0]?.channelId ?? null;
+      if (where === channelId) await removeAgent(this.app, helper, actorId);
+    }
+    store.dropInbox(parentId, 'helper', channelId);
+  }
+
+  /** On start: helpers left with nothing to do (TeamBot stopped between their report and their removal). */
   async sweep() {
-    for (const a of this.app.store.listAgents()) if (a.parentId) await this.retireIfDone(a.id);
+    for (const a of this.app.store.listAgents()) if (a.parentId) await this.finish(a.id);
   }
 }

@@ -1,6 +1,7 @@
-// Team tools: talking to people and agents, and working the task board.
+// Team tools: talking to people and agents, showing your progress, and asking a human.
 import { z } from 'zod';
-import { TASK_STATUSES, type TaskStatus } from '@teambot/shared';
+import { PROGRESS_STATUSES, PROGRESS_TOOL, type ProgressStatus } from '@teambot/shared';
+import { markMissingFiles } from '../shared-files.js';
 import type { Actor } from '../workspace.js';
 import { defineTool, type ToolContext, type ToolDef } from './types.js';
 
@@ -8,24 +9,12 @@ const actorOf = (ctx: ToolContext): Actor => ({ id: ctx.agent.id, depth: ctx.run
 
 const Attachments = z.array(z.string()).max(20).optional().describe('Files in /shared to attach, e.g. ["/shared/report.pdf"]');
 
-function resolveMemberId(ctx: ToolContext, name: string | undefined | null): string | null | undefined {
-  if (name === undefined) return undefined;
-  if (name === null || name === '' || name.toLowerCase() === 'nobody' || name.toLowerCase() === 'unassigned') return null;
-  if (name.toLowerCase() === 'me') return ctx.agent.id;
-  const m = ctx.app.workspace.findMember(name);
-  if (!m) {
-    const names = [...ctx.app.store.listAgents(), ...ctx.app.store.listHumans()].map((x) => x.name).join(', ');
-    throw new Error(`No teammate named "${name}". Team: ${names}`);
-  }
-  return m.id;
-}
-
 export function workspaceTools(): ToolDef[] {
   return [
     defineTool({
       name: 'post_message',
       description:
-        'Post a message in a channel such as "#general". Mention a teammate with @Name only when you need them to act — a mention wakes them up and hands them your message.',
+        'Post a message in a channel such as "#general". Mention a teammate with @Name only when you need them to act — a mention wakes them up and hands them your message. Ask another agent to help only when its stated specialty fits the task; do routine work yourself.',
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({
@@ -44,7 +33,7 @@ export function workspaceTools(): ToolDef[] {
 
     defineTool({
       name: 'send_dm',
-      description: 'Send a direct message to one teammate (human or agent). The recipient is always notified.',
+      description: 'Send a direct message to one existing teammate (human or agent). The recipient is always notified. Ask another agent for help only when its stated specialty fits the task; do routine research and execution yourself. Give the specialist a focused request and the context it needs.',
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({
@@ -81,88 +70,36 @@ export function workspaceTools(): ToolDef[] {
         }
         const messages = ctx.app.store.listMessages(channel.id, { limit: a.limit ?? 20 });
         if (!messages.length) return `${ws.channelLabel(channel, ctx.agent.id)} has no messages yet.`;
-        return [
+        const lines = [
           `Last ${messages.length} messages in ${ws.channelLabel(channel, ctx.agent.id)} (oldest first):`,
           ...messages.map((m) => `[${m.createdAt.slice(0, 16).replace('T', ' ')}] ${ws.memberName(m.authorId)}${m.threadId ? ' (thread reply)' : ''}: ${ws.messageBody(m)}`),
-        ].join('\n');
+        ];
+        return markMissingFiles(ctx.app.cfg.sharedDir, lines.join('\n'));
       },
     }),
 
     defineTool({
-      name: 'list_tasks',
-      description: 'List tasks on the team task board.',
-      risk: 'internal',
-      readOnlyOk: true,
-      schema: z.object({
-        status: z.enum(['open', 'all', ...TASK_STATUSES] as [string, ...string[]]).optional().describe('"open" (default) = not done or cancelled'),
-        assignee: z.string().optional().describe('"me", a teammate name, or omit for everyone'),
-      }),
-      async execute(a, ctx) {
-        const ws = ctx.app.workspace;
-        const status = a.status ?? 'open';
-        const assigneeId = a.assignee ? resolveMemberId(ctx, a.assignee) : undefined;
-        const tasks = ctx.app.store.listTasks().filter((t) => {
-          if (status === 'open' && (t.status === 'done' || t.status === 'cancelled')) return false;
-          if (status !== 'open' && status !== 'all' && t.status !== status) return false;
-          if (assigneeId !== undefined && t.assigneeId !== assigneeId) return false;
-          return true;
-        });
-        if (!tasks.length) return 'No matching tasks.';
-        return tasks
-          .map((t) => {
-            const last = t.notes.at(-1);
-            return ws.taskLine(t) + (t.description ? `\n    ${t.description.slice(0, 300)}` : '') + (last ? `\n    latest note (${ws.memberName(last.authorId)}): ${last.text.slice(0, 300)}` : '');
-          })
-          .join('\n');
-      },
-    }),
-
-    defineTool({
-      name: 'create_task',
+      name: PROGRESS_TOOL,
       description:
-        'Create a task on the team board, optionally assigned to a teammate (who is notified) and depending on other tasks (the assignee is told when they are done).',
+        'Lay out your plan for the job in front of you as a checklist, and keep it current as you work: send the whole list each time, with the step you are on in_progress and finished steps done. Add, drop or reword steps as you learn more. The person you work for follows your work through it. Skip it for quick answers.',
       risk: 'internal',
+      readOnlyOk: true, // the checklist belongs to this run; it changes nothing else
       schema: z.object({
-        title: z.string().min(1),
-        description: z.string().optional().describe('What done looks like, inputs, where to put the output'),
-        assignee: z.string().optional().describe('Teammate name, or "me"'),
-        depends_on: z.array(z.number().int()).optional().describe('Task numbers that must be done first'),
-        channel: z.string().optional().describe('Channel the task belongs to, e.g. "#launch"'),
+        steps: z
+          .array(
+            z.object({
+              text: z.string().trim().min(1).max(200).describe('One step, e.g. "Compare the three pricing pages"'),
+              status: z.enum(PROGRESS_STATUSES as [ProgressStatus, ...ProgressStatus[]]),
+            }),
+          )
+          .min(1)
+          .max(30),
       }),
-      summarize: (a) => `Create task "${a.title}"${a.assignee ? ` for ${a.assignee}` : ''}`,
+      summarize: (a) => a.steps.find((s) => s.status === 'in_progress')?.text ?? 'Update progress',
       async execute(a, ctx) {
-        const ws = ctx.app.workspace;
-        const channelId = a.channel ? ws.resolveChannel(a.channel, ctx.agent.id).id : null;
-        const task = ws.createTask(
-          {
-            title: a.title,
-            description: a.description,
-            assigneeId: resolveMemberId(ctx, a.assignee) ?? null,
-            dependsOn: a.depends_on,
-            channelId,
-          },
-          actorOf(ctx),
-        );
-        return `Created task #${task.number}: ${ws.taskLine(task)}`;
-      },
-    }),
-
-    defineTool({
-      name: 'update_task',
-      description:
-        'Update a task: change its status, hand it to someone else (assignee), and/or add a note. Notes are how you report results and blockers.',
-      risk: 'internal',
-      schema: z.object({
-        task: z.number().int().describe('Task number, e.g. 3 for #3'),
-        status: z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]]).optional(),
-        assignee: z.string().optional().describe('Hand the task to this teammate ("me" to take it)'),
-        note: z.string().optional(),
-      }),
-      summarize: (a) => `Update task #${a.task}`,
-      async execute(a, ctx) {
-        const ws = ctx.app.workspace;
-        const task = ws.updateTask(a.task, { status: a.status, assigneeId: resolveMemberId(ctx, a.assignee), note: a.note }, actorOf(ctx));
-        return `Updated: ${ws.taskLine(task)}`;
+        const run = ctx.app.store.updateRun(ctx.run.id, { progress: a.steps });
+        ctx.app.bus.emit('run.progress', { agentId: run.agentId, runId: run.id, channelId: run.channelId }, { run });
+        return `Progress saved: ${a.steps.filter((s) => s.status === 'done').length} of ${a.steps.length} steps done.`;
       },
     }),
 

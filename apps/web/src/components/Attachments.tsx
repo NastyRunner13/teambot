@@ -1,25 +1,22 @@
-// Files attached to a message. Images show a small preview; everything opens in Shared files.
+// Files attached to a message. Images show a small preview; any file opens in the preview dialog.
 import { FileText } from 'lucide-react';
-import { useLocation } from 'wouter';
 import type { Attachment } from '@teambot/shared';
 import { bytes } from '../lib/format';
-
-const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
-export const fileUrl = (path: string) => `/api/shared/file?path=${encodeURIComponent(path)}`;
+import { useStore } from '../store';
+import { IMAGE, fileUrl } from './FilePreview';
 
 export function Attachments({ items }: { items: Attachment[] }) {
-  const [, navigate] = useLocation();
+  const openFile = useStore((s) => s.openFile);
   if (!items.length) return null;
-  const open = (path: string) => navigate(`/files?path=${encodeURIComponent(path)}`);
   return (
     <div className="attachments">
       {items.map((a) =>
         IMAGE.test(a.name) ? (
-          <button key={a.path} className="attachment-image" onClick={() => open(a.path)} title={a.path} aria-label={`Open ${a.name}`}>
+          <button key={a.path} className="attachment-image" onClick={() => openFile(a.path)} title={a.path} aria-label={`Open ${a.name}`}>
             <img src={fileUrl(a.path)} alt={a.name} loading="lazy" />
           </button>
         ) : (
-          <button key={a.path} className="attachment" onClick={() => open(a.path)} title={a.path}>
+          <button key={a.path} className="attachment" onClick={() => openFile(a.path)} title={a.path}>
             <FileText size={16} />
             <span className="attachment-copy">
               <strong className="ellipsis">{a.name}</strong>

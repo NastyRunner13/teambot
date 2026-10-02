@@ -1,7 +1,6 @@
-// Channels, messages and tasks: the shared surface that humans and agents both work in.
-// Posting here is also how work gets routed: @mentions and DMs land in an agent's inbox,
-// task assignments and hand-offs notify the people involved.
-import type { Agent, Channel, Human, Initiator, Member, Message, Task, TaskStatus } from '@teambot/shared';
+// Channels and messages: the shared surface that humans and agents both work in.
+// Posting here is also how work gets routed: @mentions and DMs land in an agent's inbox.
+import { ACTIVE_RUN_STATUSES, type Agent, type Channel, type Human, type Initiator, type Member, type Message } from '@teambot/shared';
 import type { App } from './app.js';
 import { attachmentFor, formatBytes } from './shared-files.js';
 import { NAME_RE, parseMentions } from './util.js';
@@ -51,6 +50,8 @@ export class Workspace {
 
   /** In team mode, direct messages that include a person are private to their members. Everything else is shared. */
   canSee(channel: Channel, viewerId: string): boolean {
+    // A helper works in its parent's conversations without joining them, so it sees what its parent sees.
+    viewerId = this.store.getAgent(viewerId)?.parentId ?? viewerId;
     if (!this.app.auth.teamMode || channel.kind !== 'dm' || channel.memberIds.includes(viewerId)) return true;
     return !channel.memberIds.some((id) => this.isHuman(id));
   }
@@ -112,6 +113,19 @@ export class Workspace {
     this.app.bus.emit('channel.updated', { actorId, channelId }, { channel: this.store.getChannel(channelId) });
   }
 
+  /**
+   * Delete a group chat and its messages. Work under way there is cancelled, and routines that posted there post in
+   * their agent's chat with the owner instead. Runs and the audit log stay. A DM can't be deleted.
+   */
+  deleteChannel(channelId: string, actorId: string) {
+    const channel = this.store.getChannel(channelId);
+    if (!channel) throw new Error('channel not found');
+    if (channel.kind === 'dm') throw new Error("A direct message can't be deleted");
+    for (const run of this.store.listRuns({ channelId, statuses: ACTIVE_RUN_STATUSES, limit: 1000 })) this.app.runtime.cancelRun(run.id, actorId);
+    this.store.deleteChannel(channelId);
+    this.app.bus.emit('channel.deleted', { actorId, channelId }, { channelId, name: channel.name });
+  }
+
   getOrCreateDm(a: string, b: string): Channel {
     const existing = this.store.findDm(a, b);
     if (existing) return existing;
@@ -149,7 +163,9 @@ export class Workspace {
     }
 
     const fromHuman = this.isHuman(input.authorId);
-    if (!channel.memberIds.includes(input.authorId)) this.addMember(channel.id, input.authorId, input.authorId);
+    // Posting joins a group chat. A DM stays between its two members: an agent working there for them (a helper, a
+    // task's assignee) speaks in it without joining, or the DM would stop being theirs.
+    if (channel.kind === 'channel' && !channel.memberIds.includes(input.authorId)) this.addMember(channel.id, input.authorId, input.authorId);
     const actor = input.actor ?? humanActor(input.authorId);
     const depth = fromHuman ? 0 : actor.depth + 1;
     const mentionIds = parseMentions(text)
@@ -184,7 +200,13 @@ export class Workspace {
 
   private route(message: Message, channel: Channel, initiator: Initiator, readOnly: boolean) {
     const targets = new Set(message.mentions.filter((id) => this.store.getAgent(id)));
-    if (channel.kind === 'dm') for (const id of channel.memberIds) if (this.store.getAgent(id)) targets.add(id);
+    if (channel.kind === 'dm') {
+      // A chat with an agent is that agent's to answer: naming a teammate there asks it to bring them in, it doesn't
+      // wake them in someone else's DM. Only people talking to each other call an agent into their DM by name.
+      const agents = channel.memberIds.filter((id) => this.store.getAgent(id));
+      if (agents.length) targets.clear();
+      for (const id of agents) targets.add(id);
+    }
     // A human replying in a thread continues the conversation with the agents already in it.
     if (message.threadId && channel.kind === 'channel' && this.isHuman(message.authorId)) {
       const root = this.store.getMessage(message.threadId);
@@ -214,152 +236,11 @@ export class Workspace {
         text: `${where} — ${author?.name ?? 'unknown'} (${author?.kind ?? '?'}) wrote${lead}:\n${this.messageBody(message)}`,
         channelId: channel.id,
         threadId: message.threadId,
-        taskNumber: null,
         depth: message.depth,
         initiator,
         readOnly,
       });
     }
     this.app.runtime.poke();
-  }
-
-  // ── tasks ─────────────────────────────────────────────────────────────
-
-  taskLine(task: Task): string {
-    const deps = task.dependsOn.length ? ` (depends on ${task.dependsOn.map((d) => `#${d}`).join(', ')})` : '';
-    return `#${task.number} [${task.status}] ${task.title} — assigned to ${this.memberName(task.assigneeId)}, created by ${this.memberName(task.creatorId)}${deps}`;
-  }
-
-  private depsSummary(task: Task): { text: string; allDone: boolean } {
-    if (!task.dependsOn.length) return { text: '', allDone: true };
-    const deps = task.dependsOn.map((n) => this.store.getTaskByNumber(n));
-    const allDone = deps.every((d) => !d || d.status === 'done');
-    const text = `Depends on: ${deps.map((d, i) => (d ? `#${d.number} (${d.status})` : `#${task.dependsOn[i]} (missing)`)).join(', ')}.`;
-    return { text, allDone };
-  }
-
-  private notifyAgent(agentId: string | null, actor: Actor, text: string, task: Task) {
-    if (!agentId || agentId === actor.id) return;
-    const agent: Agent | undefined = this.store.getAgent(agentId);
-    if (!agent) return;
-    const depth = this.isHuman(actor.id) ? 0 : actor.depth + 1;
-    if (depth > this.app.cfg.maxAgentDepth) {
-      this.app.bus.emit('loop.guard', { agentId }, { taskNumber: task.number, depth });
-      return;
-    }
-    const readOnly = !this.isHuman(actor.id) && this.fromReadOnlyRun(actor);
-    this.store.addInbox({ agentId, kind: 'task', text, channelId: task.channelId, taskNumber: task.number, depth, initiator: actor.initiator, readOnly });
-    this.app.runtime.poke();
-  }
-
-  createTask(
-    input: { title: string; description?: string; assigneeId?: string | null; dependsOn?: number[]; channelId?: string | null },
-    actor: Actor,
-  ): Task {
-    const title = input.title.trim();
-    if (!title) throw new Error('task title is required');
-    for (const n of input.dependsOn ?? []) if (!this.store.getTaskByNumber(n)) throw new Error(`task #${n} does not exist`);
-    if (input.assigneeId && !this.member(input.assigneeId)) throw new Error('assignee not found');
-
-    const task = this.store.createTask({
-      title,
-      description: input.description?.trim() ?? '',
-      status: 'todo',
-      assigneeId: input.assigneeId ?? null,
-      creatorId: actor.id,
-      channelId: input.channelId ?? null,
-      dependsOn: [...new Set(input.dependsOn ?? [])],
-    });
-    this.app.bus.emit('task.created', { actorId: actor.id, channelId: task.channelId, runId: actor.runId }, { task });
-
-    if (task.channelId) {
-      this.postMessage({
-        channelId: task.channelId,
-        authorId: actor.id,
-        text: `📋 Created task #${task.number}: **${task.title}** → ${this.memberName(task.assigneeId)}`,
-        actor,
-        route: false,
-      });
-    }
-    const deps = this.depsSummary(task);
-    this.notifyAgent(
-      task.assigneeId,
-      actor,
-      [
-        `Task #${task.number} "${task.title}" was assigned to you by ${this.memberName(actor.id)}.`,
-        task.description && `Description: ${task.description}`,
-        deps.text,
-        deps.allDone
-          ? 'Mark it in_progress when you start and done (with a short note) when finished.'
-          : 'Wait for its dependencies; you will be told when they are done.',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-      task,
-    );
-    return task;
-  }
-
-  updateTask(
-    number: number,
-    patch: { status?: TaskStatus; assigneeId?: string | null; note?: string; title?: string; description?: string },
-    actor: Actor,
-  ): Task {
-    const before = this.store.getTaskByNumber(number);
-    if (!before) throw new Error(`task #${number} does not exist`);
-    if (patch.assigneeId && !this.member(patch.assigneeId)) throw new Error('assignee not found');
-
-    const next: Task = { ...before };
-    if (patch.title?.trim()) next.title = patch.title.trim();
-    if (patch.description !== undefined) next.description = patch.description.trim();
-    if (patch.status) next.status = patch.status;
-    if (patch.assigneeId !== undefined) next.assigneeId = patch.assigneeId;
-    const note = patch.note?.trim();
-    if (note) next.notes = [...before.notes, { authorId: actor.id, text: note, at: new Date().toISOString() }];
-    const task = this.store.saveTask(next);
-    this.app.bus.emit('task.updated', { actorId: actor.id, channelId: task.channelId, runId: actor.runId }, { task, before });
-
-    const actorName = this.memberName(actor.id);
-    const noteText = note ? ` Note: ${note}` : '';
-
-    if (patch.assigneeId !== undefined && patch.assigneeId !== before.assigneeId) {
-      const deps = this.depsSummary(task);
-      this.notifyAgent(
-        task.assigneeId,
-        actor,
-        [`Task #${task.number} "${task.title}" was handed to you by ${actorName}.${noteText}`, task.description && `Description: ${task.description}`, deps.text]
-          .filter(Boolean)
-          .join('\n'),
-        task,
-      );
-    }
-
-    if (task.status !== before.status) {
-      // Creators hear about outcomes (done / blocked / cancelled), not every status flip.
-      if (task.status === 'done' || task.status === 'blocked' || task.status === 'cancelled') {
-        this.notifyAgent(
-          task.creatorId,
-          actor,
-          `Task #${task.number} "${task.title}" (assigned to ${this.memberName(task.assigneeId)}) is now ${task.status} — updated by ${actorName}.${noteText}`,
-          task,
-        );
-      }
-      if (task.status === 'done') {
-        for (const other of this.store.listTasks()) {
-          if (!other.dependsOn.includes(task.number) || other.status === 'done' || other.status === 'cancelled') continue;
-          if (!this.depsSummary(other).allDone) continue;
-          this.notifyAgent(
-            other.assigneeId,
-            actor,
-            `Task #${other.number} "${other.title}" is unblocked: all of its dependencies are done (${other.dependsOn.map((d) => `#${d}`).join(', ')}). You can start it now.`,
-            other,
-          );
-        }
-      }
-    } else if (note) {
-      const other = actor.id === task.assigneeId ? task.creatorId : task.assigneeId;
-      this.notifyAgent(other, actor, `${actorName} added a note on task #${task.number} "${task.title}": ${note}`, task);
-    }
-    return task;
   }
 }

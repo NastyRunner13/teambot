@@ -1,5 +1,5 @@
-// Search past conversations and the task board. Agents search the same history with search_history.
-import { KanbanSquare, MessageSquare, Search } from 'lucide-react';
+// Search past conversations. Agents search the same history with search_history.
+import { MessageSquare, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import type { Message, SearchResults } from '@teambot/shared';
@@ -39,7 +39,7 @@ export function SearchView() {
     if (m.threadId) openThread(m.threadId);
   }
 
-  const total = results ? results.messages.length + results.tasks.length : 0;
+  const total = results?.messages.length ?? 0;
 
   return (
     <>
@@ -53,32 +53,14 @@ export function SearchView() {
           }}
         >
           <Search size={16} />
-          <input ref={input} className="input" aria-label="Search history" placeholder='Search messages and tasks — "exact phrase" works too' value={text} onChange={(e) => setText(e.target.value)} />
+          <input ref={input} className="input" aria-label="Search history" placeholder='Search messages — "exact phrase" works too' value={text} onChange={(e) => setText(e.target.value)} />
         </form>
       </div>
       <div className="page page-narrow">
-        {!q && <div className="empty">Search everything your team has said and done: messages in every channel and DM, task titles, descriptions and notes.</div>}
+        {!q && <div className="empty">Search everything your team has said: messages in every channel and DM.</div>}
         {q && results && total === 0 && <div className="empty">Nothing matches “{q}”. Every word has to appear, so try fewer words.</div>}
-        {results && results.tasks.length > 0 && (
-          <div className="section" style={{ marginTop: 0 }}>
-            <h2>Tasks</h2>
-            <div className="list">
-              {results.tasks.map(({ task, snippet }) => (
-                <div key={task.id} className="list-row clickable search-hit" onClick={() => navigate('/tasks')}>
-                  <KanbanSquare size={15} className="faint" />
-                  <div className="grow" style={{ minWidth: 0 }}>
-                    <div className="ellipsis">
-                      <span className="mono faint">#{task.number}</span> <strong>{task.title}</strong> <span className="badge">{task.status.replace('_', ' ')}</span>
-                    </div>
-                    <div className="small muted">{snippet}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
         {results && results.messages.length > 0 && (
-          <div className="section" style={results.tasks.length ? undefined : { marginTop: 0 }}>
+          <div className="section" style={{ marginTop: 0 }}>
             <h2>Messages</h2>
             <div className="list">
               {results.messages.map(({ message, where, snippet }) => {

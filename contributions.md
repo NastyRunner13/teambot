@@ -140,7 +140,7 @@ When writing code that interacts with models, tools, or user data, you must main
 - **Language:** Strict TypeScript throughout.
 - **Formatting:** Two-space indentation, single quotes (`'`), semicolons (`'always'`).
 - **Naming Conventions:**
-  - PascalCase for React components and filenames (`AgentView.tsx`, `ApprovalCard.tsx`).
+  - PascalCase for React components and filenames (`ChatView.tsx`, `ApprovalCard.tsx`).
   - camelCase for functions, methods, and variables.
   - kebab-case for server modules and utility files (`shared-files.ts`, `coding-tools.ts`).
 - **Imports:**

@@ -70,6 +70,7 @@ export class Runtime {
 
   start() {
     this.recover();
+    void this.app.helpers.sweep().catch((err) => console.error('could not remove finished helpers', err));
     this.timer = setInterval(() => this.poke(), 3000);
     this.poke();
   }
@@ -177,7 +178,7 @@ Don't run it again just to see the result; check the current state instead.`
         if ((current.status === 'queued' || current.status === 'running') && !this.app.budgets.blocked(agent)) this.launch(current);
         continue; // waiting on a human, paused, or out of budget
       }
-      const pending = store.pendingInbox(agent.id);
+      const pending = store.pendingInbox(agent.id).filter((i) => this.ready(agent, i));
       if (!pending.length || this.app.budgets.blocked(agent)) continue;
       const first = pending[0];
       const run = store.createRun({
@@ -200,8 +201,8 @@ Don't run it again just to see the result; check the current state instead.`
     entry.done = this.execute(run.id, entry).finally(async () => {
       this.active.delete(run.id);
       this.refreshAgentStatus(run.agentId);
-      // A helper that has finished its task leaves the team.
-      await this.app.helpers.retireIfDone(run.agentId).catch((err) => console.error('could not retire helper', err));
+      // A helper that has reported leaves the team.
+      await this.app.helpers.finish(run.agentId).catch((err) => console.error('could not remove helper', err));
       setImmediate(() => this.poke());
     });
   }
@@ -235,6 +236,7 @@ Don't run it again just to see the result; check the current state instead.`
           run = store.updateRun(runId, { status: 'cancelled' });
           for (const a of store.cancelPendingApprovals(runId)) bus.emit('approval.resolved', scope, { approval: store.getApproval(a.id) });
           bus.emit('run.cancelled', scope, { run });
+          await this.app.helpers.dismiss(run.agentId, run.channelId, null);
         } else if (reason === 'pause') {
           run = store.updateRun(runId, { status: 'paused' });
           bus.emit('run.paused', scope, { run });
@@ -247,6 +249,11 @@ Don't run it again just to see the result; check the current state instead.`
       bus.emit('run.failed', scope, { run, error: message });
       this.say(run, `⚠️ I stopped because of an error: ${message}`, false);
     }
+  }
+
+  /** Helpers' results wait until every helper is done, so the agent hears from all of them at once. */
+  private ready(agent: Agent, item: InboxItem): boolean {
+    return item.kind !== 'helper' || agent.parentId !== null || !this.app.helpers.busy(agent.id);
   }
 
   /**
@@ -269,6 +276,9 @@ Don't run it again just to see the result; check the current state instead.`
   }
 
   private say(run: Run, text: string, route = true) {
+    // A helper answers the agent that started it, not the conversation.
+    const helper = this.app.store.getAgent(run.agentId);
+    if (helper?.parentId) return this.app.helpers.report(helper, run, text);
     const channelId = run.channelId ?? this.app.workspace.getOrCreateDm(this.app.workspace.owner().id, run.agentId).id;
     try {
       this.app.workspace.postMessage({
@@ -307,9 +317,9 @@ Don't run it again just to see the result; check the current state instead.`
         continue;
       }
 
-      // 2. Take in anything new for this conversation: messages, task updates, routines. Work from other
+      // 2. Take in anything new for this conversation: messages, helpers' results, routines. Work from other
       // conversations waits for its own run, so a DM is never answered in a channel and read-only stays read-only.
-      const items = store.pendingInbox(agent.id).filter((i) => this.belongsTo(run, i));
+      const items = store.pendingInbox(agent.id).filter((i) => this.ready(agent, i) && this.belongsTo(run, i));
       if (items.length) {
         const first = transcript.length === 0;
         transcript.push({ role: 'user', content: formatInbox(this.app, agent, items, first) });
@@ -592,7 +602,12 @@ Don't run it again just to see the result; check the current state instead.`
     for (const a of store.cancelPendingApprovals(runId)) bus.emit('approval.resolved', scope, { approval: store.getApproval(a.id) });
     bus.emit('run.cancelled', scope, { run: next });
     this.refreshAgentStatus(run.agentId);
-    this.poke();
+    // Its helpers go with it; a helper stopped while waiting reports that and leaves, as after any run of its own.
+    void this.app.helpers
+      .dismiss(run.agentId, run.channelId, actorId)
+      .then(() => this.app.helpers.finish(run.agentId))
+      .catch((err) => console.error('could not remove helpers', err))
+      .finally(() => this.poke());
   }
 
   takeover(agentId: string, humanId: string) {
@@ -615,7 +630,6 @@ Don't run it again just to see the result; check the current state instead.`
         kind: 'system',
         text: `${this.app.workspace.memberName(humanId)} used your computer and handed it back.${noteSuffix(note)} The browser may be on a different page now; take a snapshot before continuing.`,
         channelId: null,
-        taskNumber: null,
         depth: 0,
         initiator: 'human',
       });

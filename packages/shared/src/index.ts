@@ -80,7 +80,7 @@ export interface Agent {
   /** Full desktop control (screenshots, mouse and keyboard). Needs a model that can see images. */
   desktop: boolean;
   network: AgentNetwork;
-  /** Set for a short-lived helper: the agent that started it. Helpers share its budget and are removed when their task is done. */
+  /** Set for a short-lived helper: the agent that started it. Helpers share its budget and are removed once they report back. */
   parentId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -108,6 +108,14 @@ export interface Attachment {
   size: number;
 }
 
+/** A file someone shared in a message: an agent's or a conversation's library. */
+export interface LibraryItem extends Attachment {
+  messageId: string;
+  channelId: string;
+  authorId: string;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   channelId: string;
@@ -126,30 +134,6 @@ export interface Message {
   lastReplyAt?: string | null;
 }
 
-export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
-export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'blocked', 'done', 'cancelled'];
-
-export interface TaskNote {
-  authorId: string;
-  text: string;
-  at: string;
-}
-
-export interface Task {
-  id: string;
-  number: number;
-  title: string;
-  description: string;
-  status: TaskStatus;
-  assigneeId: string | null;
-  creatorId: string;
-  channelId: string | null;
-  dependsOn: number[];
-  notes: TaskNote[];
-  createdAt: string;
-  updatedAt: string;
-}
-
 export type RunStatus =
   | 'queued'
   | 'running'
@@ -162,7 +146,8 @@ export type RunStatus =
 
 export const ACTIVE_RUN_STATUSES: RunStatus[] = ['queued', 'running', 'waiting_approval', 'waiting_human', 'paused'];
 
-export type InboxKind = 'message' | 'task' | 'schedule' | 'system';
+/** `helper`: a helper's job, or its result for the agent that started it. `task` only on items from the old task board. */
+export type InboxKind = 'message' | 'schedule' | 'system' | 'helper' | 'task';
 
 export interface InboxItem {
   id: string;
@@ -173,7 +158,6 @@ export interface InboxItem {
   channelId: string | null;
   /** Thread the item came from, so the agent answers in that thread. */
   threadId: string | null;
-  taskNumber: number | null;
   depth: number;
   initiator: Initiator;
   /** From a read-only routine: the run may look but not change anything. */
@@ -203,8 +187,26 @@ export interface Run {
   tokensOut: number;
   costUsd: number;
   error: string | null;
+  /** The agent's plan for this run, kept current with update_progress (empty for quick replies). */
+  progress: ProgressStep[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type ProgressStatus = 'pending' | 'in_progress' | 'done';
+export const PROGRESS_STATUSES: ProgressStatus[] = ['pending', 'in_progress', 'done'];
+
+export interface ProgressStep {
+  text: string;
+  status: ProgressStatus;
+}
+
+/** The tool agents keep their checklist with. Its calls aren't counted or listed as actions. */
+export const PROGRESS_TOOL = 'update_progress';
+
+/** A run as a conversation shows it: the run plus how many actions (tool calls) it took. */
+export interface RunSummary extends Run {
+  toolCalls: number;
 }
 
 /** `review`: an independent reviewer model decides between allow, ask and deny. */
@@ -235,7 +237,6 @@ export interface Approval {
 export interface SearchResults {
   query: string;
   messages: { message: Message; where: string; snippet: string }[];
-  tasks: { task: Task; snippet: string }[];
 }
 
 /** A reusable procedure in the SKILL.md format. */
@@ -385,7 +386,8 @@ export interface Bootstrap {
   humans: Human[];
   agents: Agent[];
   channels: Channel[];
-  tasks: Task[];
+  /** The newest top-level message of each channel above, for the conversation list. */
+  lastMessages: Message[];
   approvals: Approval[];
   activeRuns: Run[];
   schedules: Schedule[];
@@ -400,6 +402,11 @@ export interface Connector {
   name: string;
   url: string;
   createdAt: string;
+  /**
+   * Set when the server takes a token the person pastes (an API key or personal access token) instead of an OAuth
+   * sign-in: it is sent as `header: prefix + token` on every request.
+   */
+  token?: { header: string; prefix: string };
 }
 
 /** An MCP server from mcp.json ("file") or a connector added in Settings. */
@@ -409,9 +416,17 @@ export interface McpServerStatus {
   url?: string;
   connected: boolean;
   tools: number;
-  /** A connector waiting for a human to sign in (first time, or after its tokens stopped working). */
+  /** A connector waiting for a human to sign in (first time, or after its tokens stopped working), or for a new token. */
   needsSignIn: boolean;
+  /** The connector signs in with a pasted token rather than OAuth. */
+  usesToken?: boolean;
   error?: string;
+}
+
+/** One tool a connected MCP server offers. */
+export interface McpToolSummary {
+  name: string;
+  description?: string;
 }
 
 export interface Health {

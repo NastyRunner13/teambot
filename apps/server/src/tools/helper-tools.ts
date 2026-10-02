@@ -1,12 +1,11 @@
 // Growing the team from inside it.
-// Helpers: an agent splits independent work into tasks and starts a short-lived helper for each, in parallel.
 // New agents: an agent proposes a permanent teammate. A human approves it by default (risk `external`), and the
 // new agent can't get more than its creator has: the creator's network rules and budget caps, and only skills and
 // MCP servers the creator can use. No desktop, setup script or custom image; a human can add those later.
 import { z } from 'zod';
 import type { Agent } from '@teambot/shared';
 import type { App } from '../app.js';
-import { MAX_HELPERS, addAgent, nameTaken } from '../runtime/helpers.js';
+import { addAgent, nameTaken } from '../runtime/helpers.js';
 import { NAME_RE } from '../util.js';
 import { defineTool, type ToolDef } from './types.js';
 
@@ -48,35 +47,8 @@ function refusal(app: App, agent: Agent, a: CreateAgentArgs): string | null {
 export function helperTools(): ToolDef[] {
   return [
     defineTool({
-      name: 'spawn_helpers',
-      description: `Start short-lived helpers to work on independent tasks in parallel (at most ${MAX_HELPERS} at once). Each gets its own computer and a task on the board, assigned to it and created by you; you are told when each task is done, with its result in the task note. Helpers share your budget and leave when their task is done. Use it when work splits into parts that don't depend on each other, e.g. researching several companies at once.`,
-      risk: 'internal',
-      available: (agent) => !agent.parentId,
-      schema: z.object({
-        helpers: z
-          .array(
-            z.object({
-              title: z.string().min(3).max(120).describe('Short task title'),
-              task: z.string().min(10).describe('Everything the helper needs: what to do, where to put the result, what done looks like'),
-            }),
-          )
-          .min(1)
-          .max(MAX_HELPERS),
-        model: z.string().optional().describe('OpenRouter model for the helpers (default: yours)'),
-      }),
-      summarize: (a) => `Start ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'}: ${a.helpers.map((h) => h.title).join('; ')}`,
-      async execute(a, ctx) {
-        const started = ctx.app.helpers.spawn(ctx.agent, ctx.run, a.helpers, a.model);
-        return [
-          `Started ${started.length} helper${started.length === 1 ? '' : 's'}:`,
-          ...started.map(({ helper, task }) => `- ${helper.name} on task #${task.number} "${task.title}"`),
-          'You will be told as each task is done. Meanwhile, do other work or end your turn; use list_tasks to check on them.',
-        ].join('\n');
-      },
-    }),
-    defineTool({
       name: 'create_agent',
-      description: `Propose a new permanent teammate with its own role, instructions and computer, for ongoing work no one on the team covers (for one-off parallel work use spawn_helpers instead). A human usually approves it first. It gets your network rules and budget limits, and only skills and MCP servers you have. It joins #general and this channel; @mention it to give it work. You can have added at most ${MAX_CREATED_AGENTS} agents still on the team.`,
+      description: `Propose a new permanent teammate with its own role, instructions and computer, only for an ongoing specialty no existing teammate covers. Do one-off work yourself; do not create agents as temporary helpers or just to parallelize a task. A human usually approves it first. It gets your network rules and budget limits, and only skills and MCP servers you have. It joins #general (if the workspace still has one) and this channel; @mention it to give it work. You can have added at most ${MAX_CREATED_AGENTS} agents still on the team.`,
       risk: 'external',
       available: (agent) => !agent.parentId,
       schema: CreateAgentArgs,
@@ -109,7 +81,7 @@ export function helperTools(): ToolDef[] {
         const channel = run.channelId ? app.store.getChannel(run.channelId) : undefined;
         // Never into a DM: that would show a private conversation to a new member.
         if (channel?.kind === 'channel' && !channel.memberIds.includes(agent.id)) app.workspace.addMember(channel.id, agent.id, creator.id);
-        return `${agent.name} joined the team (${agent.role}, model ${agent.model}). @mention ${agent.name} or assign it a task to give it work.`;
+        return `${agent.name} joined the team (${agent.role}, model ${agent.model}). When a task matches its specialty, use send_dm or @mention ${agent.name} to request its help.`;
       },
     }),
   ];

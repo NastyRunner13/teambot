@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { useLocation } from 'wouter';
 import type { Agent } from '@teambot/shared';
 import { api } from '../api';
+import { Blob, SHAPE_EMOJI, shapeOf } from '../components/Avatar';
 import { Modal } from '../components/Modal';
 import { ModelPicker } from '../components/ModelPicker';
 import { TEMPLATES, type AgentTemplate } from '../lib/templates';
@@ -54,7 +55,9 @@ export function AgentFields({ draft, set }: { draft: Draft; set: (d: Partial<Dra
   return (
     <div className="agent-editor">
       <aside className="identity-preview">
-        <div className="identity-avatar" style={{ background: `${draft.color}24` }}>{draft.avatar || '✦'}</div>
+        <div className="identity-avatar">
+          <Blob color={draft.color} shape={shapeOf(draft.avatar)} size={88} />
+        </div>
         <h2>{draft.name || 'Your agent'}</h2>
         <p>{draft.role || 'Give your teammate a role.'}</p>
         <span className="badge">Your AI teammate</span>
@@ -63,25 +66,24 @@ export function AgentFields({ draft, set }: { draft: Draft; set: (d: Partial<Dra
       </aside>
       <div className="agent-fields">
         <h3 className="form-section-title">Make it yours</h3>
-        <div className="row" style={{ alignItems: 'flex-start', gap: 12 }}>
-          <div className="field" style={{ width: 80 }}>
-            <label htmlFor={`${id}-avatar`}>Avatar</label>
-            <input id={`${id}-avatar`} className="input" style={{ textAlign: 'center', fontSize: 18 }} value={draft.avatar} maxLength={8} onChange={(e) => set({ avatar: e.target.value })} />
-          </div>
-          <div className="field grow">
-            <label htmlFor={`${id}-name`}>Name</label>
-            <input id={`${id}-name`} className="input" value={draft.name} placeholder="e.g. Researcher" onChange={(e) => set({ name: e.target.value.replace(/\s/g, '') })} />
-            <span className="hint">One word. Teammates mention it as @{draft.name || 'Name'}.</span>
-          </div>
+        <div className="field">
+          <label htmlFor={`${id}-name`}>Name</label>
+          <input id={`${id}-name`} className="input" value={draft.name} placeholder="e.g. Researcher" onChange={(e) => set({ name: e.target.value.replace(/\s/g, '') })} />
+          <span className="hint">One word. Teammates mention it as @{draft.name || 'Name'}.</span>
         </div>
         <div className="field">
-          <span className="field-label">Choose an avatar</span>
-          <div className="avatar-options" role="group" aria-label="Choose an avatar">
-            {['🦉', '🦊', '🐙', '🐝', '🐼', '🐱', '🤖', '✨'].map((avatar) => <button type="button" key={avatar} aria-label={`Use ${avatar} avatar`} aria-pressed={draft.avatar === avatar} onClick={() => set({ avatar })}>{avatar}</button>)}
+          <span className="field-label">Look</span>
+          <div className="avatar-options" role="group" aria-label="Choose a look">
+            {SHAPE_EMOJI.map((avatar, i) => (
+              <button type="button" key={avatar} aria-label={`Look ${i + 1}`} aria-pressed={shapeOf(draft.avatar) === i} onClick={() => set({ avatar })}>
+                <Blob color={draft.color} shape={i} size={30} />
+              </button>
+            ))}
           </div>
+          <span className="hint">Telegram and Slack show it as {draft.avatar}.</span>
         </div>
         <div className="field">
-          <label htmlFor={`${id}-color`}>Avatar color</label>
+          <label htmlFor={`${id}-color`}>Color</label>
           <div className="row wrap" role="group" aria-label="Avatar colors">
             {([['#64748b', 'Slate'], ['#7c5cff', 'Violet'], ['#f59e0b', 'Amber'], ['#10b981', 'Green'], ['#ec4899', 'Rose']] as const).map(([color, name]) => <button type="button" className="color-swatch" key={color} style={{ background: color }} aria-label={`${name} avatar color`} aria-pressed={draft.color === color} onClick={() => set({ color })} />)}
             <input id={`${id}-color`} className="color-input" type="color" title="Custom avatar color" value={draft.color} onInput={(e) => set({ color: e.currentTarget.value })} />
@@ -190,7 +192,7 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
               setDraft(draftFrom(t, draft.model || defaultModel));
             }}
           >
-            <div style={{ fontSize: 20 }}>{t.avatar}</div>
+            <Blob color={t.color} shape={shapeOf(t.avatar)} size={30} />
             <div className="t-name">{t.name || 'Custom'}</div>
             <div className="t-role">{t.role ? t.role.split(':')[0] : 'Start from scratch'}</div>
           </button>
