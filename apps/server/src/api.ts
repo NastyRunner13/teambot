@@ -14,7 +14,7 @@ import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
 import { addAgent, nameTaken, removeAgent } from './runtime/helpers.js';
 import { routineSecret } from './runtime/triggers.js';
-import { MAX_UPLOAD_BYTES, listShared, openSharedFile, saveUpload, sharedPath as toSharedPath } from './shared-files.js';
+import { MAX_UPLOAD_BYTES, deleteSharedFile, listShared, openSharedFile, saveUpload, sharedPath as toSharedPath, toSharedRef } from './shared-files.js';
 import { SKILL_NAME_RE } from './skills.js';
 import { MAX_MEMORY_BYTES } from './memory.js';
 import { TOKEN_SECRET as TELEGRAM_TOKEN } from './bridges/telegram.js';
@@ -572,6 +572,17 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     );
     return workspace.updateTask(Number(req.params.number), input, humanActor(me(req).id));
   });
+  server.post<{ Params: { number: string } }>('/api/tasks/:number/start', async (req) => {
+    const task = store.getTaskByNumber(Number(req.params.number));
+    if (!task) throw new HttpError(404, 'task not found');
+    return workspace.startTask(task.number, humanActor(me(req).id));
+  });
+  server.delete<{ Params: { number: string } }>('/api/tasks/:number', async (req) => {
+    const task = store.getTaskByNumber(Number(req.params.number));
+    if (!task) throw new HttpError(404, 'task not found');
+    workspace.deleteTask(task.number, humanActor(me(req).id));
+    return { ok: true };
+  });
 
   // ── runs ─────────────────────────────────────────────────────────────
   server.get<{ Params: { id: string } }>('/api/runs/:id', async (req) => {
@@ -1002,6 +1013,12 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     const file = inShared(() => saveUpload(cfg.sharedDir, dir, name, req.body as Buffer));
     bus.emit('file.uploaded', { actorId: me(req).id }, { file });
     return file;
+  });
+  server.delete<{ Querystring: { path?: string } }>('/api/shared/file', async (req) => {
+    const rel = req.query.path ?? '';
+    if (!inShared(() => deleteSharedFile(cfg.sharedDir, rel))) throw new HttpError(404, 'file not found');
+    bus.emit('file.deleted', { actorId: me(req).id }, { path: toSharedRef(cfg.sharedDir, sharedPath(rel)) });
+    return { ok: true };
   });
   const TYPES: Record<string, string> = {
     '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8',

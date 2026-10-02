@@ -24,6 +24,8 @@ import {
 } from '@teambot/shared';
 import { newId, now } from './util.js';
 
+const LAST_TASK_NUMBER = 'last_task_number';
+
 const MIGRATIONS: string[] = [
   `
   CREATE TABLE humans (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -691,8 +693,10 @@ export class Store {
   createTask(input: Omit<Task, 'id' | 'number' | 'notes' | 'createdAt' | 'updatedAt'>): Task {
     return this.tx(() => {
       const max = this.get('SELECT COALESCE(MAX(number), 0) AS n FROM tasks');
+      // Numbers of deleted tasks are never handed out again: old messages and transcripts still say "#5".
+      const last = Math.max(Number(max?.n ?? 0), Number(this.getSetting(LAST_TASK_NUMBER) ?? 0));
       const t = now();
-      const task: Task = { ...input, id: newId('tsk'), number: Number(max?.n ?? 0) + 1, notes: [], createdAt: t, updatedAt: t };
+      const task: Task = { ...input, id: newId('tsk'), number: last + 1, notes: [], createdAt: t, updatedAt: t };
       this.run(
         `INSERT INTO tasks (id, number, title, description, status, assignee_id, creator_id, channel_id, depends_on, notes, created_at, updated_at)
          VALUES (:id, :number, :title, :description, :status, :assigneeId, :creatorId, :channelId, :dependsOn, :notes, :createdAt, :updatedAt)`,
@@ -732,6 +736,19 @@ export class Store {
       next as unknown as Record<string, unknown>,
     );
     return next;
+  }
+
+  /** Delete a task for good. Tasks that depended on it lose that dependency (returned, updated) and unread inbox items about it are dropped. */
+  deleteTask(number: number): Task[] {
+    return this.tx(() => {
+      const last = Math.max(number, Number(this.getSetting(LAST_TASK_NUMBER) ?? 0));
+      this.setSetting(LAST_TASK_NUMBER, String(last));
+      this.run('DELETE FROM tasks WHERE number = :number', { number });
+      this.run('DELETE FROM inbox WHERE task_number = :number AND run_id IS NULL', { number });
+      return this.listTasks()
+        .filter((t) => t.dependsOn.includes(number))
+        .map((t) => this.saveTask({ ...t, dependsOn: t.dependsOn.filter((n) => n !== number) }));
+    });
   }
 
   // ── runs ──────────────────────────────────────────────────────────────

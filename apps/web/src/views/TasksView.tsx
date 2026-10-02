@@ -1,11 +1,12 @@
 // The team task board. Agents and humans both create, claim and hand off tasks here.
-import { Plus } from 'lucide-react';
+import { Play, Plus, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Task, TaskStatus } from '@teambot/shared';
+import type { Agent, Task, TaskStatus } from '@teambot/shared';
 import { api } from '../api';
 import { Avatar } from '../components/Avatar';
 import { Markdown } from '../components/Markdown';
+import { MenuButton, MenuItem, MenuLabel, MenuSeparator } from '../components/Menu';
 import { Modal } from '../components/Modal';
 import { ago } from '../lib/format';
 import { memberName, useMember, useStore } from '../store';
@@ -37,24 +38,95 @@ function MemberSelect({ value, onChange, allowNone = true }: { value: string | n
   );
 }
 
+const closed = (task: Task) => task.status === 'done' || task.status === 'cancelled';
+
+/** Confirm, then delete the task for good. Resolves true if it was deleted. */
+async function deleteTask(task: Task, notify: (text: string, kind?: 'error') => void): Promise<boolean> {
+  if (!confirm(`Delete task #${task.number} "${task.title}"? It's removed for good, with its notes.`)) return false;
+  try {
+    await api.del(`/tasks/${task.number}`);
+    notify(`Task #${task.number} deleted`);
+    return true;
+  } catch (err) {
+    notify((err as Error).message, 'error');
+    return false;
+  }
+}
+
+/** Quick actions for one card: hand it to an agent (who starts right away) or delete it. */
+function TaskMenu({ task, onOpen }: { task: Task; onOpen: () => void }) {
+  // Helpers belong to the agent that started them; they aren't handed new work.
+  const agents = useStore(useShallow((s) => s.agents.filter((a) => !a.parentId)));
+  const notify = useStore((s) => s.notify);
+
+  async function assign(agent: Agent) {
+    try {
+      if (agent.id === task.assigneeId) {
+        await api.post(`/tasks/${task.number}/start`);
+        notify(`Asked ${agent.name} to work on #${task.number}`);
+      } else {
+        // A finished or cancelled task handed to someone is open again.
+        await api.patch(`/tasks/${task.number}`, { assigneeId: agent.id, ...(closed(task) ? { status: 'todo' } : {}) });
+        notify(`#${task.number} assigned to ${agent.name}, who starts on it now`);
+      }
+    } catch (err) {
+      notify((err as Error).message, 'error');
+    }
+  }
+
+  return (
+    <MenuButton label={`Actions for task #${task.number}`} title="Assign or delete" className="task-card-menu">
+      <MenuLabel>{agents.length ? 'Assign to an agent' : 'No agents yet'}</MenuLabel>
+      {agents.map((a) => {
+        const current = a.id === task.assigneeId;
+        return (
+          <MenuItem key={a.id} disabled={current && closed(task)} onSelect={() => void assign(a)}>
+            <Avatar member={a} size={20} />
+            <span className="grow ellipsis">{a.name}</span>
+            {current ? (
+              <span className="small row" style={{ gap: 4, color: 'var(--accent-text)', fontWeight: 600 }}>
+                <Play size={12} /> Start now
+              </span>
+            ) : (
+              <span className="small faint ellipsis" style={{ maxWidth: 110 }}>
+                {a.role}
+              </span>
+            )}
+          </MenuItem>
+        );
+      })}
+      <MenuSeparator />
+      <MenuItem onSelect={onOpen}>
+        <SquareArrowOutUpRight size={14} className="faint" /> Open
+      </MenuItem>
+      <MenuItem danger onSelect={() => void deleteTask(task, notify)}>
+        <Trash2 size={14} /> Delete task
+      </MenuItem>
+    </MenuButton>
+  );
+}
+
 function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const assignee = useMember(task.assigneeId);
   const tasks = useStore((s) => s.tasks);
   const waiting = task.dependsOn.filter((n) => tasks.find((t) => t.number === n)?.status !== 'done');
   return (
-    <button type="button" className="task-card" onClick={onOpen}>
-      <div className="row">
-        <span className="num">#{task.number}</span>
-        <span className="spacer" />
-        {waiting.length > 0 && <span className="badge warn">waits on {waiting.map((n) => `#${n}`).join(', ')}</span>}
-      </div>
-      <div className="title">{task.title}</div>
-      <div className="row small muted">
-        <Avatar member={assignee} size={18} />
-        <span className="grow ellipsis">{assignee?.name ?? 'Unassigned'}</span>
-        <span className="faint">{ago(task.updatedAt)}</span>
-      </div>
-    </button>
+    <div className="task-card-wrap hover-actions">
+      <button type="button" className="task-card" onClick={onOpen}>
+        <div className="row task-card-top">
+          <span className="num">#{task.number}</span>
+          <span className="spacer" />
+          {waiting.length > 0 && <span className="badge warn">waits on {waiting.map((n) => `#${n}`).join(', ')}</span>}
+        </div>
+        <div className="title">{task.title}</div>
+        <div className="row small muted">
+          <Avatar member={assignee} size={18} />
+          <span className="grow ellipsis">{assignee?.name ?? 'Unassigned'}</span>
+          <span className="faint">{ago(task.updatedAt)}</span>
+        </div>
+      </button>
+      <TaskMenu task={task} onOpen={onOpen} />
+    </div>
   );
 }
 
@@ -143,8 +215,21 @@ function TaskDialog({ number, onClose }: { number: number; onClose: () => void }
     }
   }
 
+  async function remove() {
+    if (await deleteTask(task!, notify)) onClose();
+  }
+
   return (
-    <Modal title={`#${task.number} ${task.title}`} onClose={onClose} wide>
+    <Modal
+      title={`#${task.number} ${task.title}`}
+      onClose={onClose}
+      wide
+      footer={
+        <button className="btn ghost danger" onClick={remove}>
+          <Trash2 size={14} /> Delete task
+        </button>
+      }
+    >
       <div className="row wrap" style={{ marginBottom: 14 }}>
         <select className="select" style={{ width: 170 }} value={task.status} onChange={(e) => update({ status: e.target.value })}>
           {[...COLUMNS.map((c) => c.status), 'cancelled'].map((s) => (

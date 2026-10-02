@@ -1,17 +1,18 @@
 // The /shared folder: deliverables every agent and human can see.
-import { Download, FileText, RefreshCw, Upload } from 'lucide-react';
+import { Download, Eye, FileText, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import type { SharedFile } from '@teambot/shared';
 import { api } from '../api';
 import { Markdown } from '../components/Markdown';
+import { MenuButton, MenuItem, MenuSeparator } from '../components/Menu';
 import { ago, bytes } from '../lib/format';
 import { useStore } from '../store';
 
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const TEXT = /\.(md|txt|csv|json|log|ya?ml|py|js|ts|tsx|html|css|sh|sql|xml|svg)$/i;
 
-function Preview({ path }: { path: string }) {
+function Preview({ path, onDelete }: { path: string; onDelete: () => void }) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const url = `/api/shared/file?path=${encodeURIComponent(path)}`;
@@ -34,6 +35,9 @@ function Preview({ path }: { path: string }) {
         <a className="btn sm" href={`${url}&download=1`}>
           <Download size={13} /> Download
         </a>
+        <button className="btn sm ghost danger" onClick={onDelete}>
+          <Trash2 size={13} /> Delete
+        </button>
       </div>
       <div className="file-preview">
         {error && <div className="error-text">{error}</div>}
@@ -49,8 +53,8 @@ export function FilesView() {
   const search = useSearch();
   const [, navigate] = useLocation();
   const selected = new URLSearchParams(search).get('path');
-  // Re-list when a tool finishes or a file is uploaded (that's when files can appear), not on every event.
-  const events = useStore((s) => s.events.reduce((n, e) => (e.type === 'tool.finished' || e.type === 'file.uploaded' ? n + 1 : n), 0));
+  // Re-list when a tool finishes or a file is uploaded or deleted (that's when files can change), not on every event.
+  const events = useStore((s) => s.events.reduce((n, e) => (e.type === 'tool.finished' || e.type === 'file.uploaded' || e.type === 'file.deleted' ? n + 1 : n), 0));
   const notify = useStore((s) => s.notify);
   const [files, setFiles] = useState<SharedFile[] | null>(null);
   const [uploading, setUploading] = useState(0);
@@ -75,6 +79,17 @@ export function FilesView() {
       }
     }
     if (chosen.length > 1) notify(`Uploaded ${chosen.length} files to /shared/uploads`);
+  }
+
+  async function remove(path: string) {
+    if (!confirm(`Delete ${path}? Every agent loses it too, and it can't be undone.`)) return;
+    try {
+      await api.del(`/shared/file?path=${encodeURIComponent(path)}`);
+      notify(`Deleted ${path.replace('/shared/', '')}`);
+      if (path === selected) navigate('/files');
+    } catch (err) {
+      notify((err as Error).message, 'error');
+    }
   }
 
   return (
@@ -104,25 +119,41 @@ export function FilesView() {
       <div className="split-view">
         <div className="split-list">
           {files?.length === 0 && <div className="empty" style={{ margin: 16 }}>Nothing shared yet. Agents put deliverables here, and you can upload files for them.</div>}
-          {files?.map((f) => (
-            <div
-              key={f.path}
-              className="list-row clickable"
-              style={{ background: f.path === selected ? 'var(--accent-weak)' : undefined }}
-              onClick={() => navigate(`/files?path=${encodeURIComponent(f.path)}`)}
-            >
-              <FileText size={15} className="faint" />
-              <div className="grow" style={{ minWidth: 0 }}>
-                <div className="ellipsis mono small">{f.path.replace('/shared/', '')}</div>
-                <div className="small faint">
-                  {bytes(f.size)} · {ago(f.modifiedAt)}
+          {files?.map((f) => {
+            const name = f.path.replace('/shared/', '');
+            const open = () => navigate(`/files?path=${encodeURIComponent(f.path)}`);
+            return (
+              <div
+                key={f.path}
+                className="list-row clickable hover-actions"
+                style={{ background: f.path === selected ? 'var(--accent-weak)' : undefined }}
+                onClick={open}
+              >
+                <FileText size={15} className="faint" />
+                <div className="grow" style={{ minWidth: 0 }}>
+                  <div className="ellipsis mono small">{name}</div>
+                  <div className="small faint">
+                    {bytes(f.size)} · {ago(f.modifiedAt)}
+                  </div>
                 </div>
+                <MenuButton label={`Actions for ${name}`} title="Open, download or delete">
+                  <MenuItem onSelect={open}>
+                    <Eye size={14} className="faint" /> Open
+                  </MenuItem>
+                  <MenuItem href={`/api/shared/file?path=${encodeURIComponent(f.path)}&download=1`} download>
+                    <Download size={14} className="faint" /> Download
+                  </MenuItem>
+                  <MenuSeparator />
+                  <MenuItem danger onSelect={() => void remove(f.path)}>
+                    <Trash2 size={14} /> Delete file
+                  </MenuItem>
+                </MenuButton>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="grow" style={{ overflowY: 'auto', padding: '16px 20px' }}>
-          {selected ? <Preview path={selected} /> : <div className="muted">Pick a file to preview it.</div>}
+          {selected ? <Preview path={selected} onDelete={() => void remove(selected)} /> : <div className="muted">Pick a file to preview it.</div>}
         </div>
       </div>
     </>

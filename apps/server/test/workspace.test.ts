@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
+import { humanActor } from '../src/workspace.js';
 import { addAgent, general, testApp } from './helpers.js';
 
 let current: App | null = null;
@@ -116,6 +117,67 @@ describe('attachments', () => {
     const res = await server.inject({ method: 'POST', url: `/api/channels/${general(app).id}/messages`, payload: { attachments: [first.path] } });
     expect(res.statusCode).toBe(200);
     expect(res.json().attachments[0].name).toBe('notes.txt');
+    await server.close();
+  });
+});
+
+describe('deleting tasks', () => {
+  it('removes the task, frees tasks that waited on it and never reuses its number', async () => {
+    const { app, models, owner } = setup();
+    const writer = addAgent(app, 'Writer');
+    const actor = humanActor(owner.id);
+    app.workspace.createTask({ title: 'Research' }, actor);
+    app.workspace.createTask({ title: 'Write it up', assigneeId: writer.id, dependsOn: [1] }, actor);
+    await app.runtime.idle();
+
+    app.workspace.deleteTask(1, actor);
+    await app.runtime.idle();
+
+    expect(app.store.listTasks().map((t) => [t.number, t.dependsOn])).toEqual([[2, []]]);
+    const writerInputs = models.requests.filter((r) => r.model === 'test/writer').map((r) => JSON.stringify(r.messages));
+    expect(writerInputs.some((m) => m.includes('#2') && m.includes('is unblocked'))).toBe(true);
+    expect(app.store.listEvents({ limit: 50 }).some((e) => e.type === 'task.deleted' && (e.data as { taskNumber: number }).taskNumber === 1)).toBe(true);
+
+    app.workspace.deleteTask(2, actor);
+    expect(app.workspace.createTask({ title: 'Next' }, actor).number).toBe(3);
+  });
+
+  it('drops unread inbox items about the task', () => {
+    const { app, owner } = setup();
+    app.runtime.setPausedAll(true, owner.id); // the assignment stays unread
+    const writer = addAgent(app, 'Writer');
+    app.workspace.createTask({ title: 'Draft', assigneeId: writer.id }, humanActor(owner.id));
+    expect(app.store.pendingInbox(writer.id)).toHaveLength(1);
+    app.workspace.deleteTask(1, humanActor(owner.id));
+    expect(app.store.pendingInbox(writer.id)).toHaveLength(0);
+  });
+
+  it('asks the assigned agent to start again on request, but not for closed or unassigned tasks', async () => {
+    const { app, owner } = setup();
+    const server = await buildServer(app);
+    app.runtime.setPausedAll(true, owner.id);
+    const writer = addAgent(app, 'Writer');
+    app.workspace.createTask({ title: 'Draft', assigneeId: writer.id }, humanActor(owner.id));
+    app.workspace.createTask({ title: 'Nobody' }, humanActor(owner.id));
+
+    expect((await server.inject({ method: 'POST', url: '/api/tasks/1/start' })).statusCode).toBe(200);
+    expect(app.store.pendingInbox(writer.id).map((i) => [i.taskNumber, i.text.split('\n')[0]])).toEqual([
+      [1, 'Task #1 "Draft" was assigned to you by Owner.'],
+      [1, 'Task #1 "Draft" needs you now: Owner asked you to work on it.'],
+    ]);
+    expect((await server.inject({ method: 'POST', url: '/api/tasks/2/start' })).json().error).toMatch(/not assigned to an agent/);
+    app.workspace.updateTask(1, { status: 'done' }, humanActor(owner.id));
+    expect((await server.inject({ method: 'POST', url: '/api/tasks/1/start' })).statusCode).toBe(400);
+    await server.close();
+  });
+
+  it('is available over the API', async () => {
+    const { app, owner } = setup();
+    const server = await buildServer(app);
+    app.workspace.createTask({ title: 'Draft' }, humanActor(owner.id));
+    expect((await server.inject({ method: 'DELETE', url: '/api/tasks/1' })).statusCode).toBe(200);
+    expect(app.store.listTasks()).toEqual([]);
+    expect((await server.inject({ method: 'DELETE', url: '/api/tasks/1' })).statusCode).toBe(404);
     await server.close();
   });
 });

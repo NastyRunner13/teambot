@@ -87,9 +87,18 @@ describe('the shared folder', () => {
     expect(() => app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: 'see', attachments: ['/shared/link/master.key'] })).toThrow(/outside \/shared/);
     expect((await server.inject({ method: 'GET', url: '/api/shared?path=' })).json().map((f: { path: string }) => f.path)).not.toContain('/shared/link/master.key');
 
+    // Deleting through the link, or the link itself, leaves the server's files alone.
+    expect((await server.inject({ method: 'DELETE', url: '/api/shared/file?path=/shared/link/master.key' })).statusCode).toBe(400);
+    expect((await server.inject({ method: 'DELETE', url: '/api/shared/file?path=/shared/link' })).statusCode).toBe(404);
+    expect((await server.inject({ method: 'DELETE', url: '/api/shared/file?path=/shared/../outside/master.key' })).statusCode).toBe(400);
+    expect(fs.readFileSync(path.join(outside, 'master.key'), 'utf8')).toBe('SERVER_ONLY');
+
     // Ordinary files still work.
     fs.writeFileSync(path.join(app.cfg.sharedDir, 'notes.txt'), 'hello');
     expect((await server.inject({ method: 'GET', url: '/api/shared/file?path=/shared/notes.txt' })).body).toBe('hello');
+    expect((await server.inject({ method: 'DELETE', url: '/api/shared/file?path=/shared/notes.txt' })).statusCode).toBe(200);
+    expect(fs.existsSync(path.join(app.cfg.sharedDir, 'notes.txt'))).toBe(false);
+    expect((await server.inject({ method: 'DELETE', url: '/api/shared/file?path=/shared/notes.txt' })).statusCode).toBe(404);
   });
 });
 

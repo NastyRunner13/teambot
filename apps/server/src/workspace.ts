@@ -281,22 +281,32 @@ export class Workspace {
         route: false,
       });
     }
+    this.notifyAgent(task.assigneeId, actor, this.assignmentText(task, `was assigned to you by ${this.memberName(actor.id)}`), task);
+    return task;
+  }
+
+  private assignmentText(task: Task, how: string): string {
     const deps = this.depsSummary(task);
-    this.notifyAgent(
-      task.assigneeId,
-      actor,
-      [
-        `Task #${task.number} "${task.title}" was assigned to you by ${this.memberName(actor.id)}.`,
-        task.description && `Description: ${task.description}`,
-        deps.text,
-        deps.allDone
-          ? 'Mark it in_progress when you start and done (with a short note) when finished.'
-          : 'Wait for its dependencies; you will be told when they are done.',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-      task,
-    );
+    return [
+      `Task #${task.number} "${task.title}" ${how}.`,
+      task.description && `Description: ${task.description}`,
+      deps.text,
+      deps.allDone
+        ? 'Mark it in_progress when you start and done (with a short note) when finished.'
+        : 'Wait for its dependencies; you will be told when they are done.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  /** Ask the agent a task is assigned to to work on it now, e.g. after it went quiet. */
+  startTask(number: number, actor: Actor): Task {
+    const task = this.store.getTaskByNumber(number);
+    if (!task) throw new Error(`task #${number} does not exist`);
+    if (!task.assigneeId || !this.store.getAgent(task.assigneeId)) throw new Error(`task #${number} is not assigned to an agent`);
+    if (task.status === 'done' || task.status === 'cancelled') throw new Error(`task #${number} is ${task.status}`);
+    this.notifyAgent(task.assigneeId, actor, this.assignmentText(task, `needs you now: ${this.memberName(actor.id)} asked you to work on it`), task);
+    this.app.bus.emit('task.started', { actorId: actor.id, channelId: task.channelId, runId: actor.runId }, { taskNumber: task.number, agentId: task.assigneeId });
     return task;
   }
 
@@ -344,22 +354,31 @@ export class Workspace {
           task,
         );
       }
-      if (task.status === 'done') {
-        for (const other of this.store.listTasks()) {
-          if (!other.dependsOn.includes(task.number) || other.status === 'done' || other.status === 'cancelled') continue;
-          if (!this.depsSummary(other).allDone) continue;
-          this.notifyAgent(
-            other.assigneeId,
-            actor,
-            `Task #${other.number} "${other.title}" is unblocked: all of its dependencies are done (${other.dependsOn.map((d) => `#${d}`).join(', ')}). You can start it now.`,
-            other,
-          );
-        }
-      }
+      if (task.status === 'done') this.notifyUnblocked(this.store.listTasks().filter((other) => other.dependsOn.includes(task.number)), actor);
     } else if (note) {
       const other = actor.id === task.assigneeId ? task.creatorId : task.assigneeId;
       this.notifyAgent(other, actor, `${actorName} added a note on task #${task.number} "${task.title}": ${note}`, task);
     }
     return task;
+  }
+
+  /** Delete a task for good. The audit log keeps its history; tasks waiting on it stop waiting. */
+  deleteTask(number: number, actor: Actor): Task {
+    const task = this.store.getTaskByNumber(number);
+    if (!task) throw new Error(`task #${number} does not exist`);
+    const dependents = this.store.deleteTask(number);
+    this.app.bus.emit('task.deleted', { actorId: actor.id, channelId: task.channelId, runId: actor.runId }, { taskNumber: task.number, title: task.title });
+    for (const other of dependents) this.app.bus.emit('task.updated', { actorId: actor.id, channelId: other.channelId, runId: actor.runId }, { task: other });
+    // A dependency that was already done has unblocked them before.
+    if (task.status !== 'done') this.notifyUnblocked(dependents, actor);
+    return task;
+  }
+
+  private notifyUnblocked(candidates: Task[], actor: Actor) {
+    for (const other of candidates) {
+      if (other.status === 'done' || other.status === 'cancelled' || !this.depsSummary(other).allDone) continue;
+      const deps = other.dependsOn.length ? `all of its dependencies are done (${other.dependsOn.map((d) => `#${d}`).join(', ')})` : 'it no longer waits on anything';
+      this.notifyAgent(other.assigneeId, actor, `Task #${other.number} "${other.title}" is unblocked: ${deps}. You can start it now.`, other);
+    }
   }
 }

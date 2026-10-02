@@ -463,6 +463,23 @@ p { text-wrap: pretty; }
 .column-head .badge { margin-left: auto; }
 .task-card { display: block; width: 100%; text-align: left; color: var(--text); padding: 16px; box-shadow: none; }
 .task-card .title { margin: 10px 0 20px; }
+.task-card-wrap { position: relative; }
+.task-card-wrap + .task-card-wrap { margin-top: 8px; }
+.task-card-top { padding-right: 30px; }
+.task-card-menu { position: absolute; top: 11px; right: 10px; }
+/* "⋯" menus show on hover or focus of their card or row, and always on touch screens. */
+.menu-anchor { display: contents; }
+.menu-trigger { color: var(--muted); flex-shrink: 0; opacity: 0; transition: opacity 160ms ease-out; }
+.hover-actions:hover .menu-trigger, .hover-actions:focus-within .menu-trigger, .menu-trigger[aria-expanded='true'] { opacity: 1; }
+@media (hover: none) { .menu-trigger { opacity: 1; } }
+.menu { position: fixed; z-index: 50; min-width: 240px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px; }
+.menu-label { padding: 6px 8px 4px; font-size: 11.5px; font-weight: 600; color: var(--faint); }
+.menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--accent-weak); outline: none; }
+.menu-item:disabled { opacity: 0.5; cursor: default; }
+a.menu-item { text-decoration: none; }
+.menu-item.danger { color: var(--danger); }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
 .empty { border-style: solid; background: var(--panel-2); padding: 40px 24px; font-size: 13px; line-height: 1.8; }
 .split-view { display: flex; align-items: stretch; flex: 1; min-height: 0; }
 .split-list { width: 300px; max-width: 42%; border-right: 1px solid var(--border); overflow-y: auto; flex-shrink: 0; }

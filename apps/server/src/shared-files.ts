@@ -145,6 +145,20 @@ export function saveUpload(sharedDir: string, dir: string, name: string, data: B
   }
 }
 
+/** Delete one file in /shared. Only regular files: a link is never followed, and folders stay. Returns false if there is no such file. */
+export function deleteSharedFile(sharedDir: string, rel: string): boolean {
+  const full = sharedPath(sharedDir, rel);
+  if (full === path.resolve(sharedDir)) return false;
+  // The folder is checked where it really leads; the name itself is looked at, not followed.
+  const folder = realSharedPath(sharedDir, path.dirname(full));
+  if (!folder) return false;
+  const target = path.join(folder, path.basename(full));
+  const st = fs.lstatSync(target, { throwIfNoEntry: false });
+  if (!st?.isFile()) return false;
+  fs.unlinkSync(target);
+  return true;
+}
+
 export function listShared(sharedDir: string, dir: string, limit = 1000): SharedFile[] {
   const root = realSharedPath(sharedDir, dir);
   if (!root || !fs.statSync(root).isDirectory()) return [];

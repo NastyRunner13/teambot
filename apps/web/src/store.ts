@@ -211,6 +211,7 @@ function apply(e: EventRecord) {
     if (e.type === 'agent.status' && e.agentId) next.agents = s.agents.map((a) => (a.id === e.agentId ? { ...a, status: d.status } : a));
     if (e.type === 'agent.deleted') next.agents = s.agents.filter((a) => a.id !== d.agentId);
     if (d.task) next.tasks = upsert(s.tasks, d.task as Task).sort((a, b) => a.number - b.number);
+    if (e.type === 'task.deleted') next.tasks = (next.tasks ?? s.tasks).filter((t) => t.number !== d.taskNumber);
     if (e.type === 'approval.created') next.approvals = upsert(s.approvals, d.approval as Approval);
     if (e.type === 'approval.resolved' && d.approval) next.approvals = s.approvals.filter((a) => a.id !== d.approval.id);
     if (d.run) {
