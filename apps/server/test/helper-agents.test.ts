@@ -4,7 +4,7 @@ import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import type { ChatRequest } from '../src/models/types.js';
 import { addAgent as addTeammate, removeAgent } from '../src/runtime/helpers.js';
-import { addAgent, general, messagesIn, testApp } from './helpers.js';
+import { addAgent, general, legacyHelpers, messagesIn, testApp } from './helpers.js';
 
 let current: App | null = null;
 afterEach(async () => {
@@ -22,39 +22,85 @@ function setup() {
 /** A helper's reply: its result, naming the job it was given. */
 const reportJob = (req: ChatRequest) => say(`Result for ${String(req.messages.at(-1)?.content).match(/Your job from Lead: (.+)/)?.[1]}`);
 
-/** The lead: start two helpers, say so, then answer once their results are in. */
-const leadReply = (req: ChatRequest) => {
-  const seen = JSON.stringify(req.messages);
-  if (seen.includes('reports:')) return say('Acme and Globex compared.');
-  if (seen.includes('Started 2 helpers')) return say('Two helpers are on it.');
-  return callTool('spawn_helpers', {
-    model: 'test/helper',
-    helpers: [
-      { title: 'Research Acme', job: 'Find Acme pricing and write it to /shared/acme.md' },
-      { title: 'Research Globex', job: 'Find Globex pricing and write it to /shared/globex.md' },
-    ],
-  });
-};
-
 const lastUserMessage = (req: ChatRequest) => String([...req.messages].reverse().find((m) => m.role === 'user')?.content ?? '');
 
-describe('helpers', () => {
-  it('work in parallel on one message, report back to their parent together, and leave', async () => {
+describe('independent work and existing specialists', () => {
+  it('rejects obsolete helper calls and continues research on its own computer', async () => {
     const { app, models, owner, computers } = setup();
     const lead = addAgent(app, 'Lead');
-    app.store.updateAgent(lead.id, { network: { mode: 'allowlist', allow: ['example.com'] } });
-    models.script('test/lead', [leadReply, leadReply, leadReply]);
+    const writer = addAgent(app, 'Writer');
+    models.script('test/lead', [
+      callTool('spawn_helpers', { helpers: [{ title: 'Research', job: 'Research Acme pricing' }] }),
+      callTool('browser_navigate', { url: 'https://example.com/pricing' }),
+      say('I researched the pricing.'),
+    ]);
+
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Lead research Acme pricing' });
+    await app.runtime.idle();
+
+    const request = models.requests.find((r) => r.model === 'test/lead')!;
+    const tools = request.tools!.map((t) => t.function.name);
+    expect(tools).not.toContain('spawn_helpers');
+    expect(tools).toEqual(expect.arrayContaining(['browser_navigate', 'shell', 'send_dm', 'create_agent']));
+    expect(JSON.stringify(request.messages[0])).not.toContain('spawn_helpers');
+    const run = app.store.listRuns({ agentId: lead.id })[0];
+    expect(app.store.getTranscript<{ role: string; content: string }>(run.id).find((m) => m.role === 'tool')?.content)
+      .toContain('there is no tool named "spawn_helpers"');
+    expect(computers.calls).toContainEqual(expect.objectContaining({ agentId: lead.id, path: '/browser/navigate' }));
+    expect(app.store.listAgents().map((a) => a.id).sort()).toEqual([lead.id, writer.id].sort());
+    expect(app.store.listEvents({ types: ['agent.created'] })).toEqual([]);
+    expect(app.store.listRuns({ agentId: writer.id })).toEqual([]);
+    expect(messagesIn(app, general(app).id).at(-1)?.text).toBe('I researched the pricing.');
+  });
+
+  it('shows specialties and supports a focused request to an existing specialist', async () => {
+    const { app, models, owner } = setup();
+    const lead = addAgent(app, 'Lead');
+    const analyst = addAgent(app, 'Analyst');
+    const writer = addAgent(app, 'Writer');
+    app.store.updateAgent(analyst.id, { role: 'Competitor pricing analysis' });
+    models.script('test/lead', [
+      callTool('send_dm', { to: 'Analyst', text: 'Compare Acme and Globex annual pricing; report the cheaper option and its source.' }),
+      say('[silent]'),
+      callTool('post_message', { channel: '#general', text: 'The pricing specialist found Acme cheaper.' }),
+      say('[silent]'),
+    ]);
+    models.script('test/analyst', [say('Acme is cheaper annually; source: https://example.com/pricing')]);
+
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Lead compare annual pricing' });
+    await app.runtime.idle();
+
+    const requests = models.requests.filter((r) => r.model === 'test/lead');
+    const prompt = String(requests[0].messages[0].content);
+    expect(prompt).toContain('Analyst — Competitor pricing analysis');
+    expect(prompt).toContain('Work independently by default');
+    expect(prompt).toContain('only when its stated role in the Team roster shows a specific specialty relevant to the task');
+    expect(prompt).toContain('If no specialty fits, do the work yourself');
+    expect(requests.some((r) => lastUserMessage(r).includes('Acme is cheaper annually'))).toBe(true);
+    expect(app.store.listRuns({ agentId: analyst.id })).toHaveLength(1);
+    expect(app.store.listRuns({ agentId: writer.id })).toEqual([]);
+    expect(app.store.listAgents()).toHaveLength(3);
+    expect(messagesIn(app, general(app).id).at(-1)?.text).toBe('The pricing specialist found Acme cheaper.');
+    expect(app.store.listEvents({ types: ['agent.created'] })).toEqual([]);
+    expect(app.store.getChannel(app.workspace.getOrCreateDm(lead.id, analyst.id).id)!.memberIds.sort()).toEqual([lead.id, analyst.id].sort());
+  });
+});
+
+describe('legacy helpers', () => {
+  it('finish persisted jobs, report back to their parent together, and leave', async () => {
+    const { app, models, owner, computers } = setup();
+    const lead = addAgent(app, 'Lead');
+    models.script('test/lead', [say('Acme and Globex compared.')]);
     models.script('test/helper', [reportJob, reportJob]);
 
-    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Lead compare Acme and Globex pricing' });
+    const run = app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'Compare pricing' });
+    app.store.updateRun(run.id, { status: 'completed' });
+    legacyHelpers(app, lead, run, [
+      { title: 'Research Acme', job: 'Find Acme pricing' },
+      { title: 'Research Globex', job: 'Find Globex pricing' },
+    ], 'test/helper');
     await app.runtime.idle();
     await app.runtime.idle();
-
-    // Both helpers were real agents with the parent's network rules and the requested model.
-    const created = app.store.listEvents({ types: ['agent.created'] }).reverse().map((e) => e.data.agent as { name: string; parentId: string; network: unknown; model: string });
-    expect(created.map((a) => a.name)).toEqual(['Lead-h1', 'Lead-h2']);
-    expect(created.every((a) => a.parentId === lead.id && a.model === 'test/helper')).toBe(true);
-    expect(created[0].network).toEqual({ mode: 'allowlist', allow: ['example.com'] });
 
     // The lead heard from both in one go, and only the lead spoke in the chat.
     const heard = models.requests.filter((r) => r.model === 'test/lead').map(lastUserMessage);
@@ -76,7 +122,7 @@ describe('helpers', () => {
     models.script('test/helper', [callTool('ask_for_approval', { action: 'Email the client' })]);
     const run = app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' });
     app.store.updateRun(run.id, { status: 'completed' });
-    const [helper] = app.helpers.spawn(app.store.getAgent(lead.id)!, run, [{ title: 'Email', job: 'Email the client the quote' }], 'test/helper');
+    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, run, [{ title: 'Email', job: 'Email the client the quote' }], 'test/helper');
     await app.runtime.idle();
     const waiting = app.store.listRuns({ agentId: helper.id })[0];
     expect(waiting.status).toBe('waiting_approval');
@@ -92,7 +138,7 @@ describe('helpers', () => {
     const lead = addAgent(app, 'Lead');
     app.runtime.setPausedAll(true, owner.id); // nobody works in this test
     const run = app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' });
-    const [first] = app.helpers.spawn(app.store.getAgent(lead.id)!, run, [
+    const [first] = legacyHelpers(app, app.store.getAgent(lead.id)!, run, [
       { title: 'One', job: 'The first part of it' },
       { title: 'Two', job: 'The second part of it' },
     ]);
@@ -103,11 +149,11 @@ describe('helpers', () => {
     expect(app.store.pendingInbox(lead.id)).toEqual([]);
   });
 
-  it('share their parent’s budget, cannot start helpers themselves, and go when the parent goes', async () => {
-    const { app, models, owner } = setup();
+  it('share their parent’s budget and go when the parent goes', async () => {
+    const { app, owner } = setup();
     const lead = addAgent(app, 'Lead');
     app.store.updateAgent(lead.id, { budget: { dailyUsd: 0.0001, monthlyUsd: null, dailyTokens: null } });
-    const [helper] = app.helpers.spawn(app.store.getAgent(lead.id)!, app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' }), [{ title: 'Sub-task', job: 'Do the sub-task please' }]);
+    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' }), [{ title: 'Sub-task', job: 'Do the sub-task please' }]);
     app.runtime.setPausedAll(true, owner.id); // keep the helper from working in this test
 
     app.bus.emit('llm.response', { agentId: helper.id }, { costUsd: 0.0001, inputTokens: 10, outputTokens: 10 });
@@ -115,16 +161,11 @@ describe('helpers', () => {
     expect(app.budgets.blocked(app.store.getAgent(helper.id)!)).toContain("Lead's daily budget");
 
     expect(app.tools.forAgent(app.store.getAgent(helper.id)!).map((t) => t.name)).not.toContain('spawn_helpers');
-    expect(() => app.helpers.spawn(app.store.getAgent(helper.id)!, app.store.listRuns({ agentId: lead.id })[0], [{ title: 'Nested', job: 'Nested job here' }])).toThrow(/cannot start helpers/);
-    expect(() =>
-      app.helpers.spawn(app.store.getAgent(lead.id)!, app.store.listRuns({ agentId: lead.id })[0], Array.from({ length: 5 }, (_, i) => ({ title: `T${i}`, job: 'Some job here' }))),
-    ).toThrow(/At most 5 helpers/);
 
     const server = await buildServer(app);
     await server.inject({ method: 'DELETE', url: `/api/agents/${lead.id}` });
     expect(app.store.listAgents()).toHaveLength(0);
     await server.close();
-    void models;
   });
 });
 
@@ -215,7 +256,7 @@ describe('create_agent', () => {
     expect(app.store.listApprovals({ status: 'pending' })).toHaveLength(1);
 
     app.runtime.setPausedAll(true, owner.id);
-    const [helper] = app.helpers.spawn(app.store.getAgent(lead.id)!, app.store.listRuns({ agentId: lead.id })[0], [{ title: 'Sub-task', job: 'Do the sub-task please' }]);
+    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, app.store.listRuns({ agentId: lead.id })[0], [{ title: 'Sub-task', job: 'Do the sub-task please' }]);
     expect(app.tools.forAgent(helper).map((t) => t.name)).not.toContain('create_agent');
   });
 });

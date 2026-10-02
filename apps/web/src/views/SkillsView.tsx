@@ -194,12 +194,15 @@ export function SkillsView({ name }: { name?: string }) {
 
   return (
     <>
-      <div className="hub-toolbar">
-        <span className="small muted grow">Written procedures your agents load and follow, in the open SKILL.md format.</span>
-        <button className="btn sm" onClick={() => setCreating(true)}>
-          <Plus size={14} /> New skill
+      <header className="fill-head">
+        <div className="grow">
+          <h1>Skills</h1>
+          <p>Written procedures your agents load and follow, in the open SKILL.md format.</p>
+        </div>
+        <button className="btn" onClick={() => setCreating(true)}>
+          <Plus size={15} /> New skill
         </button>
-      </div>
+      </header>
       <div className="split-view">
         <div className="split-list">
           {skills.length === 0 && (

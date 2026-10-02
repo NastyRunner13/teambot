@@ -8,7 +8,7 @@ import { overlayPanel, useStore } from './store';
 import { AppsView } from './views/AppsView';
 import { AgentChat, ChannelChat, Welcome } from './views/ChatView';
 import { NewChatView } from './views/NewChatView';
-import { SettingsView } from './views/SettingsView';
+import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from './views/SettingsView';
 import { JoinPage, SignInPage } from './views/SignIn';
 import { SearchView } from './views/SearchView';
 
@@ -36,7 +36,7 @@ function HealthBanner() {
         {problems.map((p, i) => (
           <div key={i}>{p}</div>
         ))}
-        <Link href="/settings">Check settings</Link>
+        <Link href="/settings/system">Check settings</Link>
       </div>
     </div>
   );
@@ -98,12 +98,19 @@ export function App() {
           <Route path="/new" component={NewChatView} />
           <Route path="/c/:id">{(p) => <ChannelChat id={p.id} />}</Route>
           <Route path="/agents/:id">{(p) => <AgentChat id={p.id} />}</Route>
-          <Route path="/apps">{() => <AppsView tab="apps" />}</Route>
-          <Route path="/skills">{() => <AppsView tab="skills" />}</Route>
-          <Route path="/skills/:name">{(p) => <AppsView tab="skills" skill={p.name} />}</Route>
-          <Route path="/files">{() => <AppsView tab="files" />}</Route>
+          <Route path="/apps">{() => <AppsView page={{ kind: 'browse' }} />}</Route>
+          <Route path="/apps/installed">{() => <AppsView page={{ kind: 'installed' }} />}</Route>
+          <Route path="/apps/custom">{() => <AppsView page={{ kind: 'custom' }} />}</Route>
+          <Route path="/apps/mcp/:name">{(p) => <AppsView page={{ kind: 'server', name: decodeURIComponent(p.name) }} />}</Route>
+          <Route path="/apps/:id">{(p) => <AppsView page={{ kind: 'app', id: p.id }} />}</Route>
+          <Route path="/skills">{() => <AppsView page={{ kind: 'skills' }} />}</Route>
+          <Route path="/skills/:name">{(p) => <AppsView page={{ kind: 'skills', skill: p.name }} />}</Route>
+          <Route path="/files">{() => <AppsView page={{ kind: 'files' }} />}</Route>
           <Route path="/search" component={SearchView} />
-          <Route path="/settings" component={SettingsView} />
+          <Route path="/settings">{() => <SettingsView section="general" />}</Route>
+          <Route path="/settings/:section">
+            {(p) => (SETTINGS_SECTIONS.includes(p.section as SettingsSection) ? <SettingsView section={p.section as SettingsSection} /> : <Redirect to="/settings" replace />)}
+          </Route>
           {/* Pages that are now part of the chats: old links land on the latest one. */}
           {['/tasks', '/approvals', '/activity'].map((old) => (
             <Route key={old} path={old}>

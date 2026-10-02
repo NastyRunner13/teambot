@@ -10,7 +10,7 @@ import type { TranscriptMessage } from '../src/models/types.js';
 import { DEFAULT_POLICY_YAML, PolicyManager } from '../src/policy.js';
 import { removeAgent } from '../src/runtime/helpers.js';
 import { Runtime } from '../src/runtime/runtime.js';
-import { addAgent, general, messagesIn, testApp } from './helpers.js';
+import { addAgent, general, legacyHelpers, messagesIn, testApp } from './helpers.js';
 
 let current: App | null = null;
 let server: FastifyInstance | null = null;
@@ -208,7 +208,7 @@ describe('read-only routines', () => {
     for (const name of ['remember', 'forget', 'spawn_helpers', 'ask_for_approval']) expect(offered).not.toContain(name);
     const [remember, spawn] = toolResults(app, app.store.listRuns({ agentId: watcher.id })[0].id);
     expect(remember).toContain('Blocked: this is a read-only routine');
-    expect(spawn).toContain('Blocked: this is a read-only routine');
+    expect(spawn).toContain('there is no tool named "spawn_helpers"');
     expect(app.memory.read('agent', watcher)).not.toContain('MUTATED');
 
     // The teammate it pinged gets a read-only run too.
@@ -267,7 +267,7 @@ describe('budgets with helpers', () => {
     const { app } = setup();
     const lead = addAgent(app, 'Lead');
     app.store.updateAgent(lead.id, { budget: { dailyUsd: 1, monthlyUsd: null, dailyTokens: null } });
-    const [helper] = app.helpers.spawn(
+    const [helper] = legacyHelpers(app,
       app.store.getAgent(lead.id)!,
       app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' }),
       [{ title: 'Sub-task', job: 'Do the sub-task please' }],

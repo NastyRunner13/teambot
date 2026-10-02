@@ -14,7 +14,7 @@ export function workspaceTools(): ToolDef[] {
     defineTool({
       name: 'post_message',
       description:
-        'Post a message in a channel such as "#general". Mention a teammate with @Name only when you need them to act — a mention wakes them up and hands them your message.',
+        'Post a message in a channel such as "#general". Mention a teammate with @Name only when you need them to act — a mention wakes them up and hands them your message. Ask another agent to help only when its stated specialty fits the task; do routine work yourself.',
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({
@@ -33,7 +33,7 @@ export function workspaceTools(): ToolDef[] {
 
     defineTool({
       name: 'send_dm',
-      description: 'Send a direct message to one teammate (human or agent). The recipient is always notified.',
+      description: 'Send a direct message to one existing teammate (human or agent). The recipient is always notified. Ask another agent for help only when its stated specialty fits the task; do routine research and execution yourself. Give the specialist a focused request and the context it needs.',
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({

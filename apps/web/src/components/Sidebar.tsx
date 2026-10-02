@@ -1,27 +1,12 @@
 // The conversation list: every agent and group chat, newest first, with your profile and the apps hub below.
 import { BookOpen, FolderOpen, LogOut, Monitor, Moon, PanelLeft, Pause, Play, Plug, Plus, Search, Settings, Sun } from 'lucide-react';
-import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { api } from '../api';
 import { previewOf, useConversations } from '../lib/conversations';
+import { useTheme } from '../lib/theme';
 import { memberName, useStore } from '../store';
 import { Avatar, GroupAvatar } from './Avatar';
 import { MenuButton, MenuItem, MenuLabel, MenuSeparator } from './Menu';
-
-type Theme = 'dark' | 'light' | 'system';
-
-function useTheme(): [Theme, (t: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(() => (document.documentElement.dataset.theme as Theme) || 'dark');
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem('teambot-theme', theme);
-    } catch {
-      /* Theme still works when storage is disabled. */
-    }
-  }, [theme]);
-  return [theme, setTheme];
-}
 
 function ProfileMenu() {
   const me = useStore((s) => s.me);

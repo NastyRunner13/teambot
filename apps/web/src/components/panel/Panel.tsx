@@ -1,6 +1,6 @@
 // The right panel beside a conversation: the agent's (or group's) profile with Details, Library and Computer,
 // and the pages it opens — a routine, its editor, memory, customize, a thread or a run's full log.
-import { Brain, ChevronLeft, ChevronRight, FileImage, FileText, Pause, PanelRightClose, Play, SlidersHorizontal, UserPlus } from 'lucide-react';
+import { Brain, ChevronLeft, ChevronRight, FileImage, FileText, Pause, PanelRightClose, Play, SlidersHorizontal, Trash2, UserPlus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useShallow } from 'zustand/react/shallow';
@@ -361,8 +361,10 @@ function ChannelProfile({ channelId }: { channelId: string }) {
 function ChannelDetails({ channel }: { channel: Channel }) {
   const agents = useStore((s) => s.agents);
   const humans = useStore((s) => s.humans);
+  const routines = useStore((s) => s.schedules);
   const showPanel = useStore((s) => s.showPanel);
   const notify = useStore((s) => s.notify);
+  const [, navigate] = useLocation();
   const members = [...humans, ...agents].filter((m) => channel.memberIds.includes(m.id));
   const outside = agents.filter((a) => !a.parentId && !channel.memberIds.includes(a.id));
   const group = channel.kind === 'channel';
@@ -371,6 +373,19 @@ function ChannelDetails({ channel }: { channel: Channel }) {
     try {
       if (add) await api.post(`/channels/${channel.id}/members`, { memberId: id });
       else await api.del(`/channels/${channel.id}/members/${id}`);
+    } catch (err) {
+      notify((err as Error).message, 'error');
+    }
+  }
+
+  async function remove() {
+    const posting = routines.filter((r) => r.channelId === channel.id).length;
+    const moved = posting ? ` ${posting === 1 ? 'A routine that posts' : `${posting} routines that post`} here will post in its agent's chat instead.` : '';
+    if (!confirm(`Delete #${channel.name}? Its messages are deleted for everyone and any work under way here stops. Files in /shared stay.${moved}`)) return;
+    try {
+      await api.del(`/channels/${channel.id}`);
+      notify(`#${channel.name} was deleted`);
+      navigate('/');
     } catch (err) {
       notify((err as Error).message, 'error');
     }
@@ -444,6 +459,13 @@ function ChannelDetails({ channel }: { channel: Channel }) {
             </div>
           ))}
           <p className="small muted">Mentioning an agent with @Name here also adds it.</p>
+        </section>
+      )}
+      {group && (
+        <section className="panel-section">
+          <button className="btn sm ghost danger" onClick={() => void remove()}>
+            <Trash2 size={13} /> Delete this chat
+          </button>
         </section>
       )}
     </>

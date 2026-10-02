@@ -402,6 +402,11 @@ export interface Connector {
   name: string;
   url: string;
   createdAt: string;
+  /**
+   * Set when the server takes a token the person pastes (an API key or personal access token) instead of an OAuth
+   * sign-in: it is sent as `header: prefix + token` on every request.
+   */
+  token?: { header: string; prefix: string };
 }
 
 /** An MCP server from mcp.json ("file") or a connector added in Settings. */
@@ -411,9 +416,17 @@ export interface McpServerStatus {
   url?: string;
   connected: boolean;
   tools: number;
-  /** A connector waiting for a human to sign in (first time, or after its tokens stopped working). */
+  /** A connector waiting for a human to sign in (first time, or after its tokens stopped working), or for a new token. */
   needsSignIn: boolean;
+  /** The connector signs in with a pasted token rather than OAuth. */
+  usesToken?: boolean;
   error?: string;
+}
+
+/** One tool a connected MCP server offers. */
+export interface McpToolSummary {
+  name: string;
+  description?: string;
 }
 
 export interface Health {

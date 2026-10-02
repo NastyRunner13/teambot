@@ -47,15 +47,18 @@ export function FilesView() {
 
   return (
     <>
-      <div className="hub-toolbar">
-        <span className="small muted grow">
-          Every agent sees this folder at <span className="mono">/shared</span>
-        </span>
-        <button className="btn sm icon" onClick={load} title="Refresh" aria-label="Refresh">
-          <RefreshCw size={13} />
+      <header className="fill-head">
+        <div className="grow">
+          <h1>Files</h1>
+          <p>
+            The shared folder. Every agent sees it at <span className="mono">/shared</span>, and so do you.
+          </p>
+        </div>
+        <button className="btn icon" onClick={load} title="Refresh" aria-label="Refresh">
+          <RefreshCw size={14} />
         </button>
-        <button className="btn sm" onClick={() => picker.current?.click()} disabled={uploading > 0}>
-          <Upload size={13} /> {uploading > 0 ? 'Uploading…' : 'Upload'}
+        <button className="btn" onClick={() => picker.current?.click()} disabled={uploading > 0}>
+          <Upload size={14} /> {uploading > 0 ? 'Uploading…' : 'Upload'}
         </button>
         <input
           ref={picker}
@@ -67,7 +70,7 @@ export function FilesView() {
             e.target.value = '';
           }}
         />
-      </div>
+      </header>
       <div className="split-view">
         <div className="split-list">
           {files?.length === 0 && <div className="empty" style={{ margin: 16 }}>Nothing shared yet. Agents put deliverables here, and you can upload files for them.</div>}

@@ -1,8 +1,9 @@
 // MCP servers come from two places:
 // - mcp.json (same shape as Claude's .mcp.json), read at startup;
-// - connectors: remote MCP servers added in Settings by URL. A connector that needs sign-in uses OAuth (discovery,
+// - connectors: remote MCP servers added under Connect apps by URL. A connector that needs sign-in uses OAuth (discovery,
 //   dynamic client registration and PKCE are done by the MCP SDK). Its tokens are a reserved vault secret, so agents
-//   never see them, and the SDK refreshes them as they expire.
+//   never see them, and the SDK refreshes them as they expire. A connector can instead take a token the person
+//   pastes (an API key or personal access token, e.g. GitHub's), kept as its own reserved secret and sent in a header.
 // Their tools are offered to the agents that list the server in their settings, under the name
 // mcp__<server>__<tool>, with risk "external".
 import crypto from 'node:crypto';
@@ -11,7 +12,7 @@ import type { OAuthClientProvider, OAuthDiscoveryState } from '@modelcontextprot
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { z } from 'zod';
-import type { Agent, Connector, McpServerStatus } from '@teambot/shared';
+import type { Agent, Connector, McpServerStatus, McpToolSummary } from '@teambot/shared';
 import type { Bus } from '../bus.js';
 import type { Store } from '../store.js';
 import type { Vault } from '../vault.js';
@@ -49,6 +50,9 @@ const safe = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, '_');
 /** Connector names become tool-name prefixes: short, lower-case, no spaces. */
 export const CONNECTOR_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/;
 export const connectorSecret = (name: string) => `TEAMBOT_MCP_${Buffer.from(name).toString('hex').toUpperCase()}`;
+/** A pasted token gets a secret of its own, so it is redacted from tool output like any other secret value. */
+export const connectorTokenSecret = (name: string) => `${connectorSecret(name)}_TOKEN`;
+const HEADER_RE = /^[A-Za-z0-9-]{1,64}$/;
 export const CONNECTOR_CALLBACK = '/api/connectors/callback';
 const SIGN_IN_TTL_MS = 15 * 60_000;
 
@@ -153,6 +157,10 @@ class VaultAuth implements OAuthClientProvider {
   }
 }
 
+/** The server turned the request away for its credentials (an OAuth sign-in that ended, or a token it no longer accepts). */
+const refused = (err: unknown, UnauthorizedError: abstract new (...args: never[]) => Error) =>
+  err instanceof UnauthorizedError || [401, 403].includes((err as { code?: number } | undefined)?.code ?? 0);
+
 /** "fetch failed" says nothing; name the address and the network error underneath. */
 function connectError(err: unknown, url: string): string {
   const code = (err as { cause?: { code?: string } })?.cause?.code;
@@ -242,10 +250,11 @@ export class McpManager {
     return c;
   }
 
-  addConnector(name: string, url: string): Connector {
+  addConnector(name: string, url: string, token?: Connector['token']): Connector {
     if (!CONNECTOR_NAME_RE.test(name)) throw new Error('Connector names are up to 24 lower-case letters, digits, - or _');
     if (this.servers.has(name) || this.connectors().some((c) => c.name === name)) throw new Error(`There is already an MCP server named "${name}"`);
-    const connector: Connector = { name, url: checkConnectorUrl(url), createdAt: new Date().toISOString() };
+    if (token && (!HEADER_RE.test(token.header) || token.prefix.length > 32 || /[\r\n]/.test(token.prefix))) throw new Error('Name the header the token goes in, e.g. Authorization');
+    const connector: Connector = { name, url: checkConnectorUrl(url), createdAt: new Date().toISOString(), ...(token ? { token } : {}) };
     this.store.setSetting('connectors', JSON.stringify([...this.connectors(), connector]));
     this.servers.set(name, { source: 'connector', url: connector.url, tools: [] });
     return connector;
@@ -256,8 +265,18 @@ export class McpManager {
     await this.servers.get(name)?.client?.close().catch(() => undefined);
     this.servers.delete(name);
     this.vault.delete(connectorSecret(name));
+    this.vault.delete(connectorTokenSecret(name));
     for (const [state, s] of this.signIns) if (s.name === name) this.signIns.delete(state);
     this.store.setSetting('connectors', JSON.stringify(this.connectors().filter((c) => c.name !== name)));
+  }
+
+  /** Saves the token a token connector sends. Connect afterwards to use it. */
+  setToken(name: string, value: string) {
+    const connector = this.connector(name);
+    if (!connector.token) throw new Error(`${name} signs in through its own page, not with a token`);
+    const token = value.trim();
+    if (token.length < 8 || /\s/.test(token)) throw new Error('Paste the whole token, without spaces');
+    this.vault.set(connectorTokenSecret(name), token);
   }
 
   /** Connects, starting a sign-in if the server asks for one: the person opens `authUrl` and is sent back to the callback. */
@@ -291,7 +310,7 @@ export class McpManager {
   private async reconnect(connector: Connector) {
     const auth = new VaultAuth(this.vault, connector.name, { name: connector.name, state: '', redirectUrl: '', startedAt: 0 });
     const saved = auth.read();
-    if (saved.client && !saved.tokens) {
+    if (!connector.token && saved.client && !saved.tokens) {
       this.servers.set(connector.name, { source: 'connector', url: connector.url, tools: [], needsSignIn: true });
       return;
     }
@@ -303,8 +322,25 @@ export class McpManager {
     await this.servers.get(connector.name)?.client?.close().catch(() => undefined);
     const { Client, StreamableHTTPClientTransport, SSEClientTransport, UnauthorizedError } = await sdk();
     const url = new URL(connector.url);
+    const pending = { source: 'connector' as const, url: connector.url, tools: [] };
+    let options: { authProvider: VaultAuth } | { fetch: typeof fetch } = { authProvider: auth };
+    if (connector.token) {
+      const token = this.vault.get(connectorTokenSecret(connector.name));
+      if (!token) {
+        this.servers.set(connector.name, { ...pending, needsSignIn: true });
+        return;
+      }
+      const { header, prefix } = connector.token;
+      options = {
+        fetch: (input, init) => {
+          const headers = new Headers(init?.headers);
+          headers.set(header, prefix + token);
+          return fetch(input, { ...init, headers });
+        },
+      };
+    }
     // Older servers speak SSE at a URL ending in /sse; everything else uses Streamable HTTP.
-    const transport = /\/sse\/?$/.test(url.pathname) ? new SSEClientTransport(url, { authProvider: auth }) : new StreamableHTTPClientTransport(url, { authProvider: auth });
+    const transport = /\/sse\/?$/.test(url.pathname) ? new SSEClientTransport(url, options) : new StreamableHTTPClientTransport(url, options);
     const client = new Client({ name: 'teambot', version: '0.1.0' });
     try {
       await client.connect(transport);
@@ -312,9 +348,13 @@ export class McpManager {
       this.servers.set(connector.name, { source: 'connector', url: connector.url, client, tools: tools as McpToolInfo[] });
     } catch (err) {
       await client.close().catch(() => undefined);
+      if (connector.token && refused(err, UnauthorizedError)) {
+        this.servers.set(connector.name, { ...pending, needsSignIn: true, error: `${url.host} didn't accept the token. Paste a new one.` });
+        return;
+      }
       const needsSignIn = err instanceof UnauthorizedError || !!auth.signIn.authUrl;
       const error = needsSignIn ? undefined : connectError(err, connector.url);
-      this.servers.set(connector.name, { source: 'connector', url: connector.url, tools: [], needsSignIn, error });
+      this.servers.set(connector.name, { ...pending, needsSignIn, error });
       if (error) console.error(`Connector "${connector.name}" failed to connect: ${error}`);
     }
   }
@@ -324,11 +364,13 @@ export class McpManager {
     const server = this.servers.get(name);
     if (!server?.client) return;
     await server.client.close().catch(() => undefined);
-    this.servers.set(name, { ...server, client: undefined, tools: [], needsSignIn: true });
+    const usesToken = this.connectors().some((c) => c.name === name && c.token);
+    this.servers.set(name, { ...server, client: undefined, tools: [], needsSignIn: true, error: usesToken ? 'The token stopped working. Paste a new one.' : undefined });
     this.bus.emit('connector.updated', {}, { name, change: 'signed_out', servers: this.status() });
   }
 
   status(): McpServerStatus[] {
+    const tokens = new Set(this.connectors().filter((c) => c.token).map((c) => c.name));
     return [...this.servers.entries()].map(([name, s]) => ({
       name,
       source: s.source,
@@ -336,8 +378,15 @@ export class McpManager {
       connected: !!s.client,
       tools: s.tools.length,
       needsSignIn: !!s.needsSignIn,
+      ...(tokens.has(name) ? { usesToken: true } : {}),
       error: s.error,
     }));
+  }
+
+  /** What a connected server offers, for its page under Connect apps. */
+  tools(name: string): McpToolSummary[] | undefined {
+    const server = this.servers.get(name);
+    return server?.tools.map((t) => ({ name: t.name, ...(t.description ? { description: t.description.slice(0, 300) } : {}) }));
   }
 
   serverNames(): string[] {
@@ -364,9 +413,9 @@ export class McpManager {
             try {
               result = await client.callTool({ name: tool.name, arguments: args }, undefined, { signal: ctx.signal, timeout: 120_000 });
             } catch (err) {
-              if (s.source === 'connector' && err instanceof (await sdk()).UnauthorizedError) {
+              if (s.source === 'connector' && refused(err, (await sdk()).UnauthorizedError)) {
                 await this.signedOut(server);
-                throw new Error(`The ${server} connector needs a human to sign in again (Settings → Connectors).`);
+                throw new Error(`The ${server} connector needs a human to sign in again (Connect apps → ${server}).`);
               }
               throw err;
             }

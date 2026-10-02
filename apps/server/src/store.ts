@@ -636,6 +636,16 @@ export class Store {
   removeMember(channelId: string, memberId: string) {
     this.run('DELETE FROM channel_members WHERE channel_id = :channelId AND member_id = :memberId', { channelId, memberId });
   }
+  /** A channel with its messages and unread work. Runs and the audit log stay; routines that posted there lose their target. */
+  deleteChannel(id: string) {
+    this.tx(() => {
+      this.run('DELETE FROM messages WHERE channel_id = :id', { id });
+      this.run('DELETE FROM channel_members WHERE channel_id = :id', { id });
+      this.run('DELETE FROM inbox WHERE channel_id = :id AND run_id IS NULL', { id });
+      this.run('UPDATE schedules SET channel_id = NULL WHERE channel_id = :id', { id });
+      this.run('DELETE FROM channels WHERE id = :id', { id });
+    });
+  }
   findDm(a: string, b: string): Channel | undefined {
     const r = this.get(
       `SELECT c.id FROM channels c
@@ -768,12 +778,14 @@ export class Store {
     );
     return next;
   }
-  listRuns(opts: { agentId?: string; statuses?: RunStatus[]; limit?: number } = {}): Run[] {
+  listRuns(opts: { agentId?: string; channelId?: string; statuses?: RunStatus[]; limit?: number } = {}): Run[] {
     const where: string[] = [];
     if (opts.agentId) where.push('agent_id = :agentId');
+    if (opts.channelId) where.push('channel_id = :channelId');
     if (opts.statuses?.length) where.push(`status IN (${opts.statuses.map((s) => `'${s}'`).join(',')})`);
     return this.all(`SELECT * FROM runs ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT :limit`, {
       agentId: opts.agentId,
+      channelId: opts.channelId,
       limit: opts.limit ?? 50,
     }).map(toRun);
   }

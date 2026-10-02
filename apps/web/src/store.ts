@@ -327,6 +327,16 @@ function apply(e: EventRecord) {
       }
     }
     if (d.channel) next.channels = upsert(s.channels, d.channel as Channel);
+    if (e.type === 'channel.deleted') {
+      const gone = d.channelId as string;
+      const { [gone]: _messages, ...messages } = s.messages;
+      const { [gone]: _last, ...lastMessages } = s.lastMessages;
+      next.channels = s.channels.filter((c) => c.id !== gone);
+      next.messages = messages;
+      next.lastMessages = lastMessages;
+      // Its routines now post in their agent's chat with the owner.
+      next.schedules = s.schedules.map((x) => (x.channelId === gone ? { ...x, channelId: null } : x));
+    }
     if (d.agent && e.type.startsWith('agent.')) next.agents = upsert(s.agents, d.agent as Agent);
     if (e.type === 'agent.status' && e.agentId) next.agents = s.agents.map((a) => (a.id === e.agentId ? { ...a, status: d.status } : a));
     if (e.type === 'agent.deleted') next.agents = s.agents.filter((a) => a.id !== d.agentId);

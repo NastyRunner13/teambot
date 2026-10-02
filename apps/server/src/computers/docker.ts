@@ -77,7 +77,10 @@ export class HttpComputerHandle implements ComputerHandle {
 
 export class DockerComputers implements ComputerProvider {
   private docker = new Docker();
+  /** Every ensure() in flight, so concurrent callers share one. Most only check a computer that is already running. */
   private starting = new Map<string, Promise<ComputerHandle>>();
+  /** Computers actually being started. Only these read as 'starting': the live view drops its connection for that. */
+  private booting = new Set<string>();
 
   constructor(
     private cfg: Config,
@@ -165,7 +168,7 @@ export class DockerComputers implements ComputerProvider {
   }
 
   async status(agentId: string): Promise<ComputerStatus> {
-    if (this.starting.has(agentId)) return { agentId, state: 'starting' };
+    if (this.booting.has(agentId)) return { agentId, state: 'starting' };
     try {
       const info = await this.inspect(agentId);
       if (!info) return { agentId, state: 'missing' };
@@ -258,6 +261,7 @@ export class DockerComputers implements ComputerProvider {
       return this.waitHealthy(agentId, handle);
     }
 
+    this.booting.add(agentId);
     this.bus.emit('computer.starting', { agentId });
     try {
       // A stopped computer built from another (or an older) image is recreated; its disk (the volume) is kept.
@@ -286,6 +290,8 @@ export class DockerComputers implements ComputerProvider {
     } catch (err) {
       this.bus.emit('computer.error', { agentId }, { error: errorMessage(err) });
       throw err;
+    } finally {
+      this.booting.delete(agentId);
     }
   }
 

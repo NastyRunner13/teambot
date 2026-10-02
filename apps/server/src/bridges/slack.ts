@@ -290,9 +290,9 @@ export class SlackBridge {
         this.app.bus.emit('bridge.paired', {}, { platform: PLATFORM });
         return this.reply(event.channel, `Paired with TeamBot. ${HELP}`);
       }
-      return this.reply(event.channel, 'That code is wrong or has expired. Get a new one from Settings → Slack in TeamBot.');
+      return this.reply(event.channel, 'That code is wrong or has expired. Get a new one from Connect apps → Slack in TeamBot.');
     }
-    if (event.user !== this.userId) return this.reply(event.channel, 'This TeamBot is private. To pair, click Pair in Settings → Slack in the app and send me: pair 123456');
+    if (event.user !== this.userId) return this.reply(event.channel, 'This TeamBot is private. To pair, click Pair in Connect apps → Slack in the app and send me: pair 123456');
 
     const answer = command(this.app, text);
     if (answer !== null) return this.reply(event.channel, answer, event.thread_ts);

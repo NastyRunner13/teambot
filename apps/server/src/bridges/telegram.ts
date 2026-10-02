@@ -203,13 +203,13 @@ export class TelegramBridge {
         this.app.bus.emit('bridge.paired', {}, { platform: PLATFORM });
         await this.reply(chatId, `Paired with TeamBot. ${HELP}`);
       } else if (chatId !== this.chatId) {
-        await this.reply(chatId, 'To pair, open Settings → Telegram in TeamBot, click Pair, and send the code you get: /start 123456');
+        await this.reply(chatId, 'To pair, open Connect apps → Telegram in TeamBot, click Pair, and send the code you get: /start 123456');
       } else {
         await this.reply(chatId, HELP);
       }
       return;
     }
-    if (chatId !== this.chatId) return this.reply(chatId, 'This TeamBot is private. Pair this chat from Settings → Telegram in the app.');
+    if (chatId !== this.chatId) return this.reply(chatId, 'This TeamBot is private. Pair this chat from Connect apps → Telegram in the app.');
 
     const answer = command(this.app, text);
     if (answer !== null) return this.reply(chatId, answer);

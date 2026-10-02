@@ -534,6 +534,12 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     bus.emit('channel.updated', { actorId: me(req).id, channelId: req.params.id }, { channel });
     return channel;
   });
+  server.delete<{ Params: { id: string } }>('/api/channels/:id', async (req) => {
+    const channel = channelFor(req, req.params.id);
+    if (channel.kind === 'dm') throw new HttpError(409, "A direct message can't be deleted");
+    workspace.deleteChannel(channel.id, me(req).id);
+    return { ok: true };
+  });
   server.post<{ Params: { id: string } }>('/api/channels/:id/members', async (req) => {
     const { memberId } = parse(z.object({ memberId: z.string() }), req.body);
     editableChannel(req, req.params.id);
@@ -679,17 +685,33 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   const ConnectInput = z.object({ origin: z.string().url().optional() });
 
   server.get('/api/connectors', async () => app.mcp.status());
+  // A connector that takes a pasted token (an API key or personal access token) instead of an OAuth sign-in.
+  const TokenInput = z.object({ header: z.string().trim().min(1).max(64), prefix: z.string().max(32).default(''), value: z.string().min(1).max(4096) });
   server.post('/api/connectors', async (req) => {
-    const input = parse(ConnectInput.extend({ name: z.string().trim().toLowerCase(), url: z.string().trim().min(1) }), req.body);
+    const input = parse(ConnectInput.extend({ name: z.string().trim().toLowerCase(), url: z.string().trim().min(1), token: TokenInput.optional() }), req.body);
     let connector;
     try {
-      connector = app.mcp.addConnector(input.name, input.url);
+      connector = app.mcp.addConnector(input.name, input.url, input.token && { header: input.token.header, prefix: input.token.prefix });
+      if (input.token) app.mcp.setToken(connector.name, input.token.value);
     } catch (err) {
+      if (connector) await app.mcp.removeConnector(connector.name);
       throw new HttpError(400, errorMessage(err));
     }
     const { authUrl } = await app.mcp.connect(connector.name, signInOrigin(input.origin));
     bus.emit('connector.added', { actorId: me(req).id }, { name: connector.name, url: connector.url, servers: app.mcp.status() });
     return { authUrl, servers: app.mcp.status() };
+  });
+  server.put<{ Params: { name: string } }>('/api/connectors/:name/token', async (req) => {
+    const { value } = parse(z.object({ value: z.string().min(1).max(4096) }), req.body);
+    if (!app.mcp.connectors().some((c) => c.name === req.params.name)) throw new HttpError(404, 'connector not found');
+    try {
+      app.mcp.setToken(req.params.name, value);
+    } catch (err) {
+      throw new HttpError(400, errorMessage(err));
+    }
+    await app.mcp.connect(req.params.name);
+    bus.emit('connector.updated', { actorId: me(req).id }, { name: req.params.name, change: 'token_updated', servers: app.mcp.status() });
+    return { servers: app.mcp.status() };
   });
   server.post<{ Params: { name: string } }>('/api/connectors/:name/connect', async (req) => {
     const { origin } = parse(ConnectInput, req.body ?? {});
@@ -709,6 +731,12 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     }
     bus.emit('connector.removed', { actorId: me(req).id }, { name, servers: app.mcp.status() });
     return app.mcp.status();
+  });
+  // What a connected server offers. Members may look (Connect apps is readable for everyone), so it isn't under /api/connectors.
+  server.get<{ Params: { name: string } }>('/api/mcp-servers/:name/tools', async (req) => {
+    const tools = app.mcp.tools(req.params.name);
+    if (!tools) throw new HttpError(404, 'MCP server not found');
+    return tools;
   });
   server.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>('/api/connectors/callback', async (req, reply) => {
     const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);

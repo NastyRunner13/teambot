@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
-import { addAgent, general, testApp } from './helpers.js';
+import { addAgent, general, messagesIn, testApp } from './helpers.js';
 
 let current: App | null = null;
 afterEach(async () => {
@@ -69,6 +69,55 @@ describe('threads', () => {
     const other = app.workspace.createChannel({ name: 'other', memberIds: [] }, owner.id);
     const root = app.workspace.postMessage({ channelId: other.id, authorId: owner.id, text: 'hello' });
     expect(() => app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: 'hi', threadId: root.id })).toThrow(/not in this conversation/);
+  });
+});
+
+describe('deleting a group chat', () => {
+  it('deletes its messages and stops the work there; runs, the audit log and routines stay', async () => {
+    const { app, models, owner, computers } = setup();
+    const ops = addAgent(app, 'Ops');
+    const writer = addAgent(app, 'Writer');
+    const room = app.workspace.createChannel({ name: 'launch', memberIds: [ops.id, writer.id] }, owner.id);
+    const routine = app.store.createSchedule({ agentId: ops.id, name: 'Daily report', cron: '0 9 * * *', prompt: 'Report', channelId: room.id, enabled: true });
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: 'unrelated', route: false });
+    computers.hangShell = true;
+    models.script('test/ops', [callTool('shell', { command: 'sleep 100' })]);
+    app.workspace.postMessage({ channelId: room.id, authorId: owner.id, text: '@Ops run the long job' });
+    // A paused agent's message waits unread.
+    app.runtime.setAgentPaused(writer.id, true, owner.id);
+    app.workspace.postMessage({ channelId: room.id, authorId: owner.id, text: '@Writer draft the post' });
+    await new Promise((r) => setTimeout(r, 100));
+    const run = app.store.listRuns({ agentId: ops.id })[0];
+    expect(run.status).toBe('running');
+
+    app.workspace.deleteChannel(room.id, owner.id);
+    await app.runtime.idle();
+
+    expect(app.store.getChannel(room.id)).toBeUndefined();
+    expect(messagesIn(app, room.id)).toEqual([]);
+    expect(messagesIn(app, general(app).id).map((m) => m.text)).toEqual(['unrelated']);
+    expect(app.store.getRun(run.id)!.status).toBe('cancelled');
+    expect(computers.cancelled).toEqual([ops.id]);
+    expect(app.store.pendingInbox(writer.id)).toEqual([]);
+    expect(app.store.getSchedule(routine.id)!.channelId).toBeNull();
+    expect(app.store.listEvents({ types: ['channel.deleted'] })[0]).toMatchObject({ actorId: owner.id, channelId: room.id });
+  });
+
+  it('works on #general too, never on a DM, and new agents then join no channel', async () => {
+    const { app, owner } = setup();
+    const server = await buildServer(app);
+    const writer = addAgent(app, 'Writer');
+    const dm = app.workspace.getOrCreateDm(owner.id, writer.id);
+    const del = (id: string) => server.inject({ method: 'DELETE', url: `/api/channels/${id}` });
+
+    expect((await del(dm.id)).statusCode).toBe(409);
+    expect((await del(general(app).id)).statusCode).toBe(200);
+    expect(app.store.getChannelByName('general')).toBeUndefined();
+    expect((await del('chn_missing')).statusCode).toBe(404);
+
+    expect((await server.inject({ method: 'POST', url: '/api/agents', payload: { name: 'Scout' } })).statusCode).toBe(200);
+    expect(app.store.listChannels().map((c) => c.kind)).toEqual(['dm']);
+    await server.close();
   });
 });
 

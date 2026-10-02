@@ -1,6 +1,6 @@
 // Channels and messages: the shared surface that humans and agents both work in.
 // Posting here is also how work gets routed: @mentions and DMs land in an agent's inbox.
-import type { Agent, Channel, Human, Initiator, Member, Message } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, type Agent, type Channel, type Human, type Initiator, type Member, type Message } from '@teambot/shared';
 import type { App } from './app.js';
 import { attachmentFor, formatBytes } from './shared-files.js';
 import { NAME_RE, parseMentions } from './util.js';
@@ -111,6 +111,19 @@ export class Workspace {
   removeMember(channelId: string, memberId: string, actorId: string) {
     this.store.removeMember(channelId, memberId);
     this.app.bus.emit('channel.updated', { actorId, channelId }, { channel: this.store.getChannel(channelId) });
+  }
+
+  /**
+   * Delete a group chat and its messages. Work under way there is cancelled, and routines that posted there post in
+   * their agent's chat with the owner instead. Runs and the audit log stay. A DM can't be deleted.
+   */
+  deleteChannel(channelId: string, actorId: string) {
+    const channel = this.store.getChannel(channelId);
+    if (!channel) throw new Error('channel not found');
+    if (channel.kind === 'dm') throw new Error("A direct message can't be deleted");
+    for (const run of this.store.listRuns({ channelId, statuses: ACTIVE_RUN_STATUSES, limit: 1000 })) this.app.runtime.cancelRun(run.id, actorId);
+    this.store.deleteChannel(channelId);
+    this.app.bus.emit('channel.deleted', { actorId, channelId }, { channelId, name: channel.name });
   }
 
   getOrCreateDm(a: string, b: string): Channel {

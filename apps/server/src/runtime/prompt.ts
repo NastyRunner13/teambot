@@ -12,7 +12,7 @@ export function buildSystemPrompt(app: App, agent: Agent, run: Run): string {
 
   const roster = [
     ...humans.map((h) => `- ${h.name} (human)`),
-    ...agents.map((a) => `- ${a.name}${a.id === agent.id ? ' (you)' : ''} — ${a.role || 'agent'}${a.id === agent.id ? '' : ` [${a.status}]`}`),
+    ...agents.filter((a) => !a.parentId || a.id === agent.id).map((a) => `- ${a.name}${a.id === agent.id ? ' (you)' : ''} — ${a.role || 'agent'}${a.id === agent.id ? '' : ` [${a.status}]`}`),
   ].join('\n');
 
   const secrets = app.vault.agentNames();
@@ -20,9 +20,7 @@ export function buildSystemPrompt(app: App, agent: Agent, run: Run): string {
   const parent = agent.parentId ? app.store.getAgent(agent.parentId) : undefined;
   const helperLine = parent
     ? `- You are a short-lived helper ${parent.name} started for one job (below). Do that job only. Your final reply is your result and goes to ${parent.name}, not to the chat, so put everything they need in it (findings, file paths, anything you couldn't do). You leave the team as soon as you reply.\n`
-    : run.readOnly
-      ? ''
-      : '- When the job you were given splits into independent parts (say, researching five companies), start helpers with spawn_helpers so they run in parallel, then end your turn: their results come back to you together when all of them are done. If the team keeps needing a skill set nobody has, propose a permanent teammate with create_agent.\n';
+    : '';
   const skills = app.skills.forAgent(agent);
   const skillSection = skills.length
     ? `\n## Skills\nWritten procedures your team wants followed. When a job matches one, call use_skill with its name before you start, then follow it.\n${skills.map((s) => `- ${s.name}: ${s.description}`).join('\n')}\n`
@@ -44,7 +42,9 @@ Channels: ${channels.map((c) => `#${c.name}${c.memberIds.includes(agent.id) ? ''
 - When you are done, end with a short final reply. It is posted automatically to ${replyTo ? `${ws.channelLabel(replyTo, agent.id)}${run.threadId ? ' (in the thread you were asked from)' : ''}` : 'the conversation you were asked from'}. If there is nothing useful to say (for example you were only cc'd), reply with exactly [silent].
 - To hand someone a file, put it in /shared and attach it to your message (the attachments argument of post_message or send_dm).
 - For a job with several steps, write your plan with ${PROGRESS_TOOL} before you start and keep it current: the step you are on in_progress, each finished step done, and the list changed when the plan does. The person you work for watches it to follow along. Skip it for quick answers.
-- To get a teammate's help, message them (send_dm) with exactly what you need; their reply comes back to you. There is no task board.
+- Work independently by default: do your own research, reasoning and execution with your tools, even when the job has several independent parts. Temporary helper bots are not available.
+- Ask an existing agent for help only when its stated role in the Team roster shows a specific specialty relevant to the task. Do not involve other agents for routine work you can handle, just because they are available, or just to split work in parallel. If no specialty fits, do the work yourself.
+- When a specialist is useful, use send_dm with a focused request, the relevant context and the result you need. Continue any work you can do independently; their reply comes back to you. Review their findings and take responsibility for the final answer. Do not send acknowledgements or repeated handoffs that needlessly wake teammates. There is no task board.
 - Some actions need a human's approval, or must be done by a human; you will be paused and resumed with the outcome. Before anything irreversible the system might not catch — sending things to people outside the team, spending money, deleting data — call ask_for_approval.
 - If a site needs a login, 2FA or a CAPTCHA, call request_human_takeover and say exactly what you need.
 - Secrets: never ask humans to paste passwords into chat. To use a stored secret, write {{secret:NAME}} inside a tool argument; it is filled in when the tool runs and you never see the value. Available secrets: ${secrets.length ? secrets.join(', ') : 'none'}.

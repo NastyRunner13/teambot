@@ -11,7 +11,7 @@ import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import { MIGRATIONS, Store } from '../src/store.js';
-import { addAgent, messagesIn, testApp } from './helpers.js';
+import { addAgent, legacyHelpers, messagesIn, testApp } from './helpers.js';
 
 let current: App | null = null;
 let server: FastifyInstance | null = null;
@@ -71,7 +71,7 @@ describe('direct messages', () => {
     const run = app.store.createRun({ agentId: lead.id, channelId: dm.id, initiator: 'human', depth: 0, title: 'x' });
     app.auth.enable(owner, 'a long enough password');
 
-    const [helper] = app.helpers.spawn(app.store.getAgent(lead.id)!, run, [{ title: 'Sub-task', job: 'Do the sub-task' }]);
+    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, run, [{ title: 'Sub-task', job: 'Do the sub-task' }]);
 
     expect(app.store.getChannel(dm.id)!.memberIds).not.toContain(helper.id);
     expect(app.workspace.canSee(app.store.getChannel(dm.id)!, helper.id)).toBe(true);

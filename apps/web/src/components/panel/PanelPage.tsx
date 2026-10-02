@@ -37,7 +37,7 @@ export function PanelPage({
 }
 
 /** An on/off switch. */
-export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (on: boolean) => void; label: string }) {
+export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (on: boolean) => void; label: string; disabled?: boolean }) {
   return (
     <button
       type="button"
@@ -45,6 +45,7 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
       aria-checked={checked}
       aria-label={label}
       title={label}
+      disabled={disabled}
       className={`switch ${checked ? 'on' : ''}`}
       onClick={(e) => {
         e.stopPropagation();
