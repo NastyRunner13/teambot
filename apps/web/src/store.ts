@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import {
   ACTIVE_RUN_STATUSES,
+  PROGRESS_TOOL,
   type Agent,
   type Approval,
   type Bootstrap,
@@ -342,7 +343,7 @@ function apply(e: EventRecord) {
       next.runs = runs;
       next.runSummaries = { ...s.runSummaries, [r.id]: { ...r, toolCalls: s.runSummaries[r.id]?.toolCalls ?? 0 } };
     }
-    if (e.type === 'tool.checked' && e.runId && s.runSummaries[e.runId]) {
+    if (e.type === 'tool.checked' && e.runId && s.runSummaries[e.runId] && d.tool !== PROGRESS_TOOL) {
       const r = s.runSummaries[e.runId];
       next.runSummaries = { ...(next.runSummaries ?? s.runSummaries), [r.id]: { ...r, toolCalls: r.toolCalls + 1 } };
     }

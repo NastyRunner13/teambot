@@ -51,8 +51,6 @@ export interface Config {
   maxConcurrentRuns: number;
   compactAtTokens: number;
   maxAgentDepth: number;
-  /** Nudge an agent about a task with no update for this many hours (0 turns follow-ups off). */
-  staleTaskHours: number;
   mcpConfigPath: string;
   /** The address people open TeamBot at, when it isn't this machine (OAuth sign-ins return here). */
   publicUrl: string;
@@ -93,7 +91,6 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     maxConcurrentRuns: num(env.TEAMBOT_MAX_CONCURRENT_RUNS, 4),
     compactAtTokens: num(env.TEAMBOT_COMPACT_AT_TOKENS, 60_000),
     maxAgentDepth: num(env.TEAMBOT_MAX_AGENT_DEPTH, 6),
-    staleTaskHours: num(env.TEAMBOT_STALE_TASK_HOURS, 4),
     mcpConfigPath: path.resolve(ROOT, env.TEAMBOT_MCP_CONFIG ?? 'mcp.json'),
     publicUrl: (env.TEAMBOT_PUBLIC_URL ?? '').replace(/\/+$/, ''),
     webDist: path.join(ROOT, 'apps', 'web', 'dist'),

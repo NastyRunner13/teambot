@@ -96,29 +96,6 @@ describe('read-only routines', () => {
   });
 });
 
-describe('follow-ups on quiet tasks', () => {
-  it('nudges an agent once per quiet stretch, and leaves waiting tasks alone', async () => {
-    const { app, models, owner } = await setup();
-    const ops = addAgent(app, 'Ops');
-    const human = { id: owner.id, depth: 0, initiator: 'human' as const };
-    const t1 = app.workspace.createTask({ title: 'Migrate the database', assigneeId: ops.id }, human);
-    const t2 = app.workspace.createTask({ title: 'Announce the migration', assigneeId: ops.id, dependsOn: [t1.number] }, human);
-    app.workspace.updateTask(t1.number, { status: 'in_progress' }, human);
-    await app.runtime.idle();
-
-    const later = new Date(Date.now() + 5 * 3_600_000);
-    expect(app.proactive.sweep(later).map((t) => t.number)).toEqual([t1.number]); // #2 waits on #1
-    expect(app.proactive.sweep(later)).toEqual([]); // once only
-    await app.runtime.idle();
-    const nudge = JSON.stringify(models.requests.filter((r) => r.model === 'test/ops').at(-1)!.messages);
-    expect(nudge).toContain('Task #1 \\"Migrate the database\\" is in progress with no update for 5h');
-
-    app.workspace.updateTask(t1.number, { note: 'halfway there' }, human);
-    expect(app.proactive.sweep(new Date(Date.now() + 10 * 3_600_000)).map((t) => t.number)).toEqual([t1.number]);
-    void t2;
-  });
-});
-
 describe('channel lead', () => {
   it('answers human messages that mention nobody', async () => {
     const { app, models, owner, server } = await setup();

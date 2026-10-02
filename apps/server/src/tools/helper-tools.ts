@@ -1,5 +1,5 @@
 // Growing the team from inside it.
-// Helpers: an agent splits independent work into tasks and starts a short-lived helper for each, in parallel.
+// Helpers: an agent splits the job it was given into independent parts and starts a short-lived helper on each.
 // New agents: an agent proposes a permanent teammate. A human approves it by default (risk `external`), and the
 // new agent can't get more than its creator has: the creator's network rules and budget caps, and only skills and
 // MCP servers the creator can use. No desktop, setup script or custom image; a human can add those later.
@@ -49,15 +49,15 @@ export function helperTools(): ToolDef[] {
   return [
     defineTool({
       name: 'spawn_helpers',
-      description: `Start short-lived helpers to work on independent tasks in parallel (at most ${MAX_HELPERS} at once). Each gets its own computer and a task on the board, assigned to it and created by you; you are told when each task is done, with its result in the task note. Helpers share your budget and leave when their task is done. Use it when work splits into parts that don't depend on each other, e.g. researching several companies at once.`,
+      description: `Split the job you were given into independent parts and start a short-lived helper on each, in parallel (at most ${MAX_HELPERS} at once), e.g. researching several companies at once. Each helper gets its own computer and only the job you write for it. Their results come back to you together once all of them are done; then combine them into your answer. Helpers share your budget and leave as soon as they report.`,
       risk: 'internal',
       available: (agent) => !agent.parentId,
       schema: z.object({
         helpers: z
           .array(
             z.object({
-              title: z.string().min(3).max(120).describe('Short task title'),
-              task: z.string().min(10).describe('Everything the helper needs: what to do, where to put the result, what done looks like'),
+              title: z.string().min(3).max(120).describe('A few words for the job, e.g. "Research Acme pricing"'),
+              job: z.string().min(10).describe('Everything the helper needs: what to do, where to put files, what to report back'),
             }),
           )
           .min(1)
@@ -69,8 +69,8 @@ export function helperTools(): ToolDef[] {
         const started = ctx.app.helpers.spawn(ctx.agent, ctx.run, a.helpers, a.model);
         return [
           `Started ${started.length} helper${started.length === 1 ? '' : 's'}:`,
-          ...started.map(({ helper, task }) => `- ${helper.name} on task #${task.number} "${task.title}"`),
-          'You will be told as each task is done. Meanwhile, do other work or end your turn; use list_tasks to check on them.',
+          ...started.map((helper, i) => `- ${helper.name}: ${a.helpers[i].title}`),
+          "Their results come to you together when all of them are done. End your turn now: say in a line what they're working on, or reply [silent].",
         ].join('\n');
       },
     }),

@@ -7,7 +7,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, TASK_STATUSES, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type TaskStatus, type WsFrame } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
 import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
@@ -22,7 +22,6 @@ import { APP_TOKEN as SLACK_APP_TOKEN, BOT_TOKEN as SLACK_BOT_TOKEN, SLACK_MANIF
 import { RESERVED_PREFIX, isReserved } from './vault.js';
 import { search } from './search.js';
 import { NAME_RE, errorMessage } from './util.js';
-import { humanActor } from './workspace.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -302,7 +301,6 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
       agents: store.listAgents(),
       channels,
       lastMessages: channels.flatMap((c) => store.listTopLevel(c.id, { limit: 1 })),
-      tasks: store.listTasks(),
       approvals: store.listApprovals({ status: 'pending' }).filter((a) => channelVisible(a.channelId, me(req).id) && runVisible(a.runId, me(req).id)),
       activeRuns: store.listRuns({ statuses: ACTIVE_RUN_STATUSES, limit: 200 }).filter((r) => channelVisible(r.channelId, me(req).id)),
       schedules: store.listSchedules().map(presentSchedule),
@@ -575,46 +573,6 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     channelFor(req, root.channelId);
     const rootId = root.threadId ?? root.id;
     return { root: store.getMessage(rootId), replies: store.listThread(rootId) };
-  });
-
-  // ── tasks ────────────────────────────────────────────────────────────
-  server.get('/api/tasks', async () => store.listTasks());
-  server.post('/api/tasks', async (req) => {
-    const input = parse(
-      z.object({
-        title: z.string().min(1),
-        description: z.string().optional(),
-        assigneeId: z.string().nullable().optional(),
-        dependsOn: z.array(z.number().int()).optional(),
-        channelId: z.string().nullable().optional(),
-      }),
-      req.body,
-    );
-    return workspace.createTask(input, humanActor(me(req).id));
-  });
-  server.patch<{ Params: { number: string } }>('/api/tasks/:number', async (req) => {
-    const input = parse(
-      z.object({
-        status: z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]]).optional(),
-        assigneeId: z.string().nullable().optional(),
-        note: z.string().optional(),
-        title: z.string().optional(),
-        description: z.string().optional(),
-      }),
-      req.body,
-    );
-    return workspace.updateTask(Number(req.params.number), input, humanActor(me(req).id));
-  });
-  server.post<{ Params: { number: string } }>('/api/tasks/:number/start', async (req) => {
-    const task = store.getTaskByNumber(Number(req.params.number));
-    if (!task) throw new HttpError(404, 'task not found');
-    return workspace.startTask(task.number, humanActor(me(req).id));
-  });
-  server.delete<{ Params: { number: string } }>('/api/tasks/:number', async (req) => {
-    const task = store.getTaskByNumber(Number(req.params.number));
-    if (!task) throw new HttpError(404, 'task not found');
-    workspace.deleteTask(task.number, humanActor(me(req).id));
-    return { ok: true };
   });
 
   // ── runs ─────────────────────────────────────────────────────────────

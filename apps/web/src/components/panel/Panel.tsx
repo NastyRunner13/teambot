@@ -155,7 +155,7 @@ function AgentProfile({ agentId, backTo }: { agentId: string; backTo?: string })
             label="role"
             onSave={(role) => api.patch(`/agents/${agent.id}`, { role }).catch((err) => (notify((err as Error).message, 'error'), Promise.reject(err)))}
           />
-          {agent.parentId && <span className="small muted">A short-lived helper; it leaves when its task is done.</span>}
+          {agent.parentId && <span className="small muted">A short-lived helper; it leaves once it reports back.</span>}
           <ProfileTabs tabs={[['details', 'Details'], ['library', 'Library'], ['computer', 'Computer']]} />
         </div>
         {current === 'details' && <AgentDetails agent={agent} />}
@@ -251,7 +251,7 @@ function AgentComputer({ agent }: { agent: Agent }) {
     <>
       <Screen agent={agent} />
       <p className="small muted" style={{ margin: '10px 0 0' }}>
-        {agent.name}'s own Linux computer. Take control to sign in to sites for it; logins persist. It sleeps when unused and wakes on the next task.
+        {agent.name}'s own Linux computer. Take control to sign in to sites for it; logins persist. It sleeps when unused and wakes when there is work.
       </p>
       <section className="panel-section">
         <div className="panel-label">Recent work</div>

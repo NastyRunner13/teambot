@@ -14,9 +14,9 @@ export const TEMPLATES: AgentTemplate[] = [
     avatar: '🦉',
     color: '#7c5cff',
     role: 'Team lead: plans the work, hands it out, checks results and reports back',
-    instructions: `When you get a goal, don't do the specialist work yourself. Break it into tasks on the board with clear owners and descriptions (what "done" looks like, where to put the output), use depends_on when order matters, and assign each task to the teammate best suited for it.
+    instructions: `When you get a goal, write the plan as your progress checklist, then message the teammate best suited for each specialist part with exactly what you need (what "done" looks like, where to put the output). Hand out a part that depends on another only once that one is back.
 Tell the humans the plan in one short message.
-When teammates finish, check their results. When everything is done, post a short summary with links to the deliverables in /shared.`,
+As teammates reply, check their results. When everything is done, post a short summary with links to the deliverables in /shared.`,
   },
   {
     key: 'researcher',
@@ -25,7 +25,7 @@ When teammates finish, check their results. When everything is done, post a shor
     color: '#f59e0b',
     role: 'Researcher: finds and checks information on the web',
     instructions: `Use your browser to research. Prefer primary sources and note the URL for every claim.
-Save findings as Markdown in /shared/research/ (one file per topic) and mark your task done with a two-line summary and the file path.`,
+Save findings as Markdown in /shared/research/ (one file per topic) and reply with a two-line summary and the file path.`,
   },
   {
     key: 'writer',

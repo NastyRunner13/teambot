@@ -6,6 +6,7 @@ import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlit
 import {
   NO_BUDGET,
   OPEN_NETWORK,
+  PROGRESS_TOOL,
   type Agent,
   type Approval,
   type ApprovalStatus,
@@ -21,11 +22,8 @@ import {
   type RunSummary,
   type Schedule,
   type Spend,
-  type Task,
 } from '@teambot/shared';
 import { newId, now } from './util.js';
-
-const LAST_TASK_NUMBER = 'last_task_number';
 
 export const MIGRATIONS: string[] = [
   `
@@ -195,6 +193,12 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX messages_run ON messages(run_id);
   CREATE INDEX runs_channel ON runs(channel_id, created_at);
   `,
+  // 15: no task board. Each run keeps the agent's plan as a progress checklist. The tasks table stays as history;
+  // unread task notices (assignments, follow-ups) are dropped so they don't start work.
+  `
+  ALTER TABLE runs ADD COLUMN progress TEXT NOT NULL DEFAULT '[]';
+  DELETE FROM inbox WHERE kind = 'task' AND run_id IS NULL;
+  `,
 ];
 
 type Row = Record<string, SQLInputValue>;
@@ -285,21 +289,6 @@ const toMessage = (r: Row): Message => ({
   ...(r.reply_count !== undefined && { replyCount: Number(r.reply_count), lastReplyAt: (r.last_reply_at as string) ?? null }),
 });
 
-const toTask = (r: Row): Task => ({
-  id: String(r.id),
-  number: Number(r.number),
-  title: String(r.title),
-  description: String(r.description),
-  status: r.status as Task['status'],
-  assigneeId: (r.assignee_id as string) ?? null,
-  creatorId: String(r.creator_id),
-  channelId: (r.channel_id as string) ?? null,
-  dependsOn: json<number[]>(r.depends_on, []),
-  notes: json<Task['notes']>(r.notes, []),
-  createdAt: String(r.created_at),
-  updatedAt: String(r.updated_at),
-});
-
 const toRun = (r: Row): Run => ({
   id: String(r.id),
   agentId: String(r.agent_id),
@@ -315,6 +304,7 @@ const toRun = (r: Row): Run => ({
   tokensOut: Number(r.tokens_out),
   costUsd: Number(r.cost_usd),
   error: (r.error as string) ?? null,
+  progress: json<Run['progress']>(r.progress, []),
   createdAt: String(r.created_at),
   updatedAt: String(r.updated_at),
 });
@@ -326,7 +316,6 @@ const toInbox = (r: Row): InboxItem => ({
   text: String(r.text),
   channelId: (r.channel_id as string) ?? null,
   threadId: (r.thread_id as string) ?? null,
-  taskNumber: r.task_number === null ? null : Number(r.task_number),
   depth: Number(r.depth),
   initiator: r.initiator as InboxItem['initiator'],
   readOnly: Number(r.read_only) === 1,
@@ -595,7 +584,6 @@ export class Store {
       this.run('DELETE FROM channel_members WHERE member_id = :id', { id });
       this.run('DELETE FROM inbox WHERE agent_id = :id', { id });
       this.run('DELETE FROM schedules WHERE agent_id = :id', { id });
-      this.run(`UPDATE tasks SET assignee_id = NULL WHERE assignee_id = :id`, { id });
       this.run(`UPDATE channels SET lead_agent_id = NULL WHERE lead_agent_id = :id`, { id });
     });
   }
@@ -727,18 +715,6 @@ export class Store {
       p,
     ).map(toMessage);
   }
-  /** Tasks whose title, description or notes contain every term. */
-  searchTasks(terms: string[], limit = 20): Task[] {
-    if (!terms.length) return [];
-    const p: Record<string, unknown> = { limit };
-    terms.forEach((t, i) => (p[`q${i}`] = `%${likeEscape(t)}%`));
-    return this.all(
-      `SELECT * FROM tasks WHERE ${terms.map((_, i) => `(title || ' ' || description || ' ' || notes) LIKE :q${i} ESCAPE '\\'`).join(' AND ')}
-       ORDER BY updated_at DESC LIMIT :limit`,
-      p,
-    ).map(toTask);
-  }
-
   /** A thread's replies, oldest first (the root is not included). */
   listThread(rootId: string, opts: { before?: string; limit?: number } = {}): Message[] {
     const rows = this.all(
@@ -747,68 +723,6 @@ export class Store {
       { rootId, before: opts.before, limit: opts.limit ?? 200 },
     );
     return rows.map(toMessage).reverse();
-  }
-
-  // ── tasks ─────────────────────────────────────────────────────────────
-  createTask(input: Omit<Task, 'id' | 'number' | 'notes' | 'createdAt' | 'updatedAt'>): Task {
-    return this.tx(() => {
-      const max = this.get('SELECT COALESCE(MAX(number), 0) AS n FROM tasks');
-      // Numbers of deleted tasks are never handed out again: old messages and transcripts still say "#5".
-      const last = Math.max(Number(max?.n ?? 0), Number(this.getSetting(LAST_TASK_NUMBER) ?? 0));
-      const t = now();
-      const task: Task = { ...input, id: newId('tsk'), number: last + 1, notes: [], createdAt: t, updatedAt: t };
-      this.run(
-        `INSERT INTO tasks (id, number, title, description, status, assignee_id, creator_id, channel_id, depends_on, notes, created_at, updated_at)
-         VALUES (:id, :number, :title, :description, :status, :assigneeId, :creatorId, :channelId, :dependsOn, :notes, :createdAt, :updatedAt)`,
-        task as unknown as Record<string, unknown>,
-      );
-      return task;
-    });
-  }
-  getTask(id: string): Task | undefined {
-    const r = this.get('SELECT * FROM tasks WHERE id = :id', { id });
-    return r && toTask(r);
-  }
-  getTaskByNumber(number: number): Task | undefined {
-    const r = this.get('SELECT * FROM tasks WHERE number = :number', { number });
-    return r && toTask(r);
-  }
-  listTasks(): Task[] {
-    return this.all('SELECT * FROM tasks ORDER BY number').map(toTask);
-  }
-  /** Open tasks untouched since `cutoff` that nobody has followed up on since their last update. */
-  staleTasks(cutoff: string): Task[] {
-    return this.all(
-      `SELECT * FROM tasks WHERE status IN ('todo', 'in_progress', 'blocked') AND assignee_id IS NOT NULL
-       AND updated_at < :cutoff AND (nudged_at IS NULL OR nudged_at < updated_at) ORDER BY number`,
-      { cutoff },
-    ).map(toTask);
-  }
-  markNudged(id: string) {
-    this.run('UPDATE tasks SET nudged_at = :at WHERE id = :id', { id, at: now() });
-  }
-
-  saveTask(task: Task): Task {
-    const next = { ...task, updatedAt: now() };
-    this.run(
-      `UPDATE tasks SET title = :title, description = :description, status = :status, assignee_id = :assigneeId, channel_id = :channelId,
-       depends_on = :dependsOn, notes = :notes, updated_at = :updatedAt WHERE id = :id`,
-      next as unknown as Record<string, unknown>,
-    );
-    return next;
-  }
-
-  /** Delete a task for good. Tasks that depended on it lose that dependency (returned, updated) and unread inbox items about it are dropped. */
-  deleteTask(number: number): Task[] {
-    return this.tx(() => {
-      const last = Math.max(number, Number(this.getSetting(LAST_TASK_NUMBER) ?? 0));
-      this.setSetting(LAST_TASK_NUMBER, String(last));
-      this.run('DELETE FROM tasks WHERE number = :number', { number });
-      this.run('DELETE FROM inbox WHERE task_number = :number AND run_id IS NULL', { number });
-      return this.listTasks()
-        .filter((t) => t.dependsOn.includes(number))
-        .map((t) => this.saveTask({ ...t, dependsOn: t.dependsOn.filter((n) => n !== number) }));
-    });
   }
 
   // ── runs ──────────────────────────────────────────────────────────────
@@ -825,6 +739,7 @@ export class Store {
       tokensOut: 0,
       costUsd: 0,
       error: null,
+      progress: [],
       createdAt: t,
       updatedAt: t,
     };
@@ -848,7 +763,7 @@ export class Store {
     const next: Run = { ...cur, ...patch, updatedAt: now() };
     this.run(
       `UPDATE runs SET status = :status, channel_id = :channelId, thread_id = :threadId, initiator = :initiator, read_only = :readOnly, depth = :depth, title = :title, steps = :steps,
-       tokens_in = :tokensIn, tokens_out = :tokensOut, cost_usd = :costUsd, error = :error, updated_at = :updatedAt WHERE id = :id`,
+       tokens_in = :tokensIn, tokens_out = :tokensOut, cost_usd = :costUsd, error = :error, progress = :progress, updated_at = :updatedAt WHERE id = :id`,
       next as unknown as Record<string, unknown>,
     );
     return next;
@@ -862,13 +777,13 @@ export class Store {
       limit: opts.limit ?? 50,
     }).map(toRun);
   }
-  /** These runs (unknown ids are skipped), each with how many tool calls it made. */
+  /** These runs (unknown ids are skipped), each with how many tool calls it made (keeping its checklist isn't one). */
   runSummaries(ids: string[]): RunSummary[] {
     if (!ids.length) return [];
     const params: Record<string, string> = {};
     ids.forEach((id, i) => (params[`id${i}`] = id));
     return this.all(
-      `SELECT r.*, (SELECT COUNT(*) FROM events e WHERE e.run_id = r.id AND e.type = 'tool.checked') AS tool_calls
+      `SELECT r.*, (SELECT COUNT(*) FROM events e WHERE e.run_id = r.id AND e.type = 'tool.checked' AND json_extract(e.data, '$.tool') != '${PROGRESS_TOOL}') AS tool_calls
        FROM runs r WHERE r.id IN (${ids.map((_, i) => `:id${i}`).join(',')})`,
       params,
     ).map((r) => ({ ...toRun(r), toolCalls: Number(r.tool_calls) }));
@@ -884,11 +799,15 @@ export class Store {
   addInbox(input: Omit<InboxItem, 'id' | 'createdAt' | 'runId' | 'threadId' | 'readOnly'> & { threadId?: string | null; readOnly?: boolean }): InboxItem {
     const item: InboxItem = { ...input, threadId: input.threadId ?? null, readOnly: input.readOnly ?? false, id: newId('inb'), createdAt: now(), runId: null };
     this.run(
-      `INSERT INTO inbox (id, agent_id, kind, text, channel_id, thread_id, task_number, depth, initiator, read_only, created_at, run_id)
-       VALUES (:id, :agentId, :kind, :text, :channelId, :threadId, :taskNumber, :depth, :initiator, :readOnly, :createdAt, :runId)`,
+      `INSERT INTO inbox (id, agent_id, kind, text, channel_id, thread_id, depth, initiator, read_only, created_at, run_id)
+       VALUES (:id, :agentId, :kind, :text, :channelId, :threadId, :depth, :initiator, :readOnly, :createdAt, :runId)`,
       item as unknown as Record<string, unknown>,
     );
     return item;
+  }
+  /** Drop an agent's unread items of one kind from one conversation. */
+  dropInbox(agentId: string, kind: InboxItem['kind'], channelId: string | null) {
+    this.run('DELETE FROM inbox WHERE agent_id = :agentId AND kind = :kind AND channel_id IS :channelId AND run_id IS NULL', { agentId, kind, channelId });
   }
   pendingInbox(agentId: string): InboxItem[] {
     return this.all('SELECT * FROM inbox WHERE agent_id = :agentId AND run_id IS NULL ORDER BY created_at, rowid', { agentId }).map(toInbox);

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Run } from '@teambot/shared';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import type { TranscriptMessage } from '../src/models/types.js';
@@ -150,52 +151,36 @@ describe('agent runtime', () => {
     expect(events).not.toContain('sk-live-1234567890');
   });
 
-  it('runs a task pipeline: assignment, dependency unblocking, and reporting back', async () => {
+  it('keeps the plan an agent writes as its progress, without counting it as actions', async () => {
     const { app, models, owner } = setup();
-    const lead = addAgent(app, 'Lead');
-    const researcher = addAgent(app, 'Researcher');
     const writer = addAgent(app, 'Writer');
-
-    // After planning, the lead stays quiet until it hears that #2 is done.
-    const leadFollowUp = (req: { messages: { role: string; content: unknown }[] }) => {
-      const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
-      return String(lastUser?.content).includes('Task #2 "Write the summary"') ? say('All done — summary is in /shared/summary.md') : say('[silent]');
-    };
-    models.script('test/lead', [
-      callTool('create_task', { title: 'Research competitors', assignee: 'Researcher', channel: '#general' }),
-      callTool('create_task', { title: 'Write the summary', assignee: 'Writer', depends_on: [1], channel: '#general' }),
-      say('Plan is on the board: #1 then #2.'),
-      leadFollowUp,
-      leadFollowUp,
-      leadFollowUp,
-    ]);
-    models.script('test/researcher', [
-      callTool('update_task', { task: 1, status: 'in_progress' }),
-      callTool('update_task', { task: 1, status: 'done', note: 'Found 3 competitors' }),
-      say('Research finished.'),
-    ]);
     models.script('test/writer', [
-      say('[silent]'), // initial assignment: waits for #1
-      callTool('update_task', { task: 2, status: 'done', note: 'Wrote /shared/summary.md' }),
-      say('Summary written.'),
+      callTool('update_progress', { steps: [{ text: 'Outline the post', status: 'in_progress' }, { text: 'Write the draft', status: 'pending' }] }),
+      callTool('read_channel', { channel: '#general' }),
+      callTool('update_progress', { steps: [{ text: 'Outline the post', status: 'done' }, { text: 'Write the draft', status: 'done' }] }),
+      say('Draft is ready.'),
     ]);
 
-    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Lead get me a competitor summary' });
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, writer.id).id, authorId: owner.id, text: 'Write a post about our launch' });
     await app.runtime.idle();
 
-    const tasks = app.store.listTasks();
-    expect(tasks.map((t) => [t.number, t.status, t.assigneeId])).toEqual([
-      [1, 'done', researcher.id],
-      [2, 'done', writer.id],
+    const [run] = app.store.listRuns({ agentId: writer.id });
+    expect(run.progress).toEqual([
+      { text: 'Outline the post', status: 'done' },
+      { text: 'Write the draft', status: 'done' },
     ]);
-    // Writer was told #2 is unblocked once #1 finished.
-    const writerInputs = models.requests.filter((r) => r.model === 'test/writer').map((r) => JSON.stringify(r.messages));
-    expect(writerInputs.some((m) => m.includes('is unblocked'))).toBe(true);
-    // Lead heard back about #2 and reported to the human.
-    const leadMessages = messagesIn(app, general(app).id).filter((m) => m.authorId === lead.id).map((m) => m.text);
-    expect(leadMessages).toContain('All done — summary is in /shared/summary.md');
-    expect(leadMessages[0]).toContain('Created task #1');
-    expect(app.store.listRuns({ agentId: lead.id }).every((r) => r.status === 'completed')).toBe(true);
+    // People watching see each version as it changes.
+    const updates = app.store
+      .listEvents({ runId: run.id, types: ['run.progress'] })
+      .reverse()
+      .map((e) => (e.data.run as Run).progress.map((s) => s.status));
+    expect(updates).toEqual([
+      ['in_progress', 'pending'],
+      ['done', 'done'],
+    ]);
+    // Keeping the checklist isn't an action; reading the channel is.
+    expect(app.store.runSummaries([run.id])[0].toolCalls).toBe(1);
+    expect(models.requests[0].messages[0].content).toContain('write your plan with update_progress');
   });
 
   it('pauses mid-tool and resumes with an honest "interrupted" result', async () => {

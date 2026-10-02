@@ -120,7 +120,7 @@ export function TeamSettings() {
     <div className="section">
       <h2>Team</h2>
       <p className="muted small">
-        Everyone signs in. Teammates share the agents, channels and task board; your direct messages stay yours. {owner ? 'As an owner you' : 'Owners'} manage the policy, secrets,
+        Everyone signs in. Teammates share the agents and channels; your direct messages stay yours. {owner ? 'As an owner you' : 'Owners'} manage the policy, secrets,
         connectors, chat bridges and the team.
       </p>
       <div className="list" style={{ marginBottom: 12 }}>

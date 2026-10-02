@@ -401,6 +401,10 @@ pre.json { background: var(--panel-2); border: 1px solid var(--border); border-r
 .work-step.asking .work-step-icon, .work-step.stopped .work-step-icon { color: var(--warn); }
 .work-step.answered .work-step-icon { color: var(--info); }
 .work-step.running { color: var(--text); }
+.progress-list { display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.progress-list .work-step { font-size: 13.5px; line-height: 1.45; }
+.work-step.pending .work-step-icon { width: 14px; height: 14px; margin: 3px 2px 0; border: 1.5px solid var(--border-strong); background: none; }
+.run-progress { margin: 0 0 18px; }
 .work-links { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 2px; }
 .live-work { align-self: flex-start; max-width: 100%; margin-top: 16px; }
 .work-toggle.live { color: var(--text); font-size: 14px; }

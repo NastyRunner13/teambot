@@ -59,7 +59,7 @@ export function SetupStatus({ agent }: { agent: Agent }) {
           {setup.output && <pre className="json">{setup.output}</pre>}
         </>
       ) : (
-        <div className="small muted">Not run yet. It runs before {agent.name}'s next task, or now with “Run it again”.</div>
+        <div className="small muted">Not run yet. It runs before {agent.name} next starts work, or now with “Run it again”.</div>
       )}
     </div>
   );

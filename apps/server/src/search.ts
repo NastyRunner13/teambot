@@ -1,4 +1,4 @@
-// Search across past conversations and the task board. Every term must appear; newest first.
+// Search across past conversations. Every term must appear; newest first.
 import type { SearchResults } from '@teambot/shared';
 import type { App } from './app.js';
 
@@ -28,9 +28,5 @@ export function search(app: App, query: string, opts: { limit?: number; viewerId
     const where = `${ws.channelLabel(channel, opts.viewerId)}${message.threadId ? ' (thread)' : ''}`;
     return [{ message, where, snippet: snippet(message.text, terms) }];
   });
-  const tasks = app.store.searchTasks(terms, Math.min(opts.limit ?? 30, 20)).map((task) => ({
-    task,
-    snippet: snippet([task.title, task.description, ...task.notes.map((n) => n.text)].join(' · '), terms),
-  }));
-  return { query, messages, tasks };
+  return { query, messages };
 }

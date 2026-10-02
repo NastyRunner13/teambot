@@ -17,7 +17,6 @@ import { Budgets } from './runtime/budget.js';
 import { CronScheduler } from './runtime/cron.js';
 import { ComputerLifecycle } from './runtime/lifecycle.js';
 import { Helpers } from './runtime/helpers.js';
-import { Proactive } from './runtime/proactive.js';
 import { Triggers } from './runtime/triggers.js';
 import { Runtime } from './runtime/runtime.js';
 import { SkillStore } from './skills.js';
@@ -47,7 +46,6 @@ export interface App {
   budgets: Budgets;
   skills: SkillStore;
   memory: MemoryStore;
-  proactive: Proactive;
   lifecycle: ComputerLifecycle;
   telegram: TelegramBridge;
   slack: SlackBridge;
@@ -95,7 +93,6 @@ export function createApp(cfg: Config, overrides: AppOverrides = {}): App {
   app.budgets = new Budgets(app);
   app.runtime = new Runtime(app);
   app.cron = new CronScheduler(app);
-  app.proactive = new Proactive(app);
   app.lifecycle = new ComputerLifecycle(app);
   app.telegram = new TelegramBridge(app, overrides.telegram);
   app.slack = new SlackBridge(app, overrides.slack);
@@ -122,7 +119,6 @@ export async function startApp(app: App) {
   await app.mcp.start();
   app.runtime.start();
   app.cron.start();
-  app.proactive.start();
   app.lifecycle.start();
   app.egress.start();
   app.triggers.start();
@@ -137,7 +133,6 @@ export async function stopApp(app: App) {
   await app.egress.stop();
   app.triggers.stop();
   app.lifecycle.stop();
-  app.proactive.stop();
   app.cron.stop();
   await app.runtime.stop();
   await app.mcp.stop();

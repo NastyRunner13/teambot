@@ -11,7 +11,6 @@ import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import { MIGRATIONS, Store } from '../src/store.js';
-import { humanActor } from '../src/workspace.js';
 import { addAgent, messagesIn, testApp } from './helpers.js';
 
 let current: App | null = null;
@@ -65,21 +64,6 @@ describe('direct messages', () => {
     expect(app.store.getChannel(dm.id)!.memberIds.sort()).toEqual([owner.id, bob.id].sort());
   });
 
-  it("answers a task filed in someone else's DM there, without joining it", async () => {
-    const { app, models, owner } = setup();
-    const writer = addAgent(app, 'Writer');
-    const editor = addAgent(app, 'Editor');
-    models.script('test/editor', [say('Edited.')]);
-    const dm = app.workspace.getOrCreateDm(owner.id, writer.id);
-
-    app.workspace.createTask({ title: 'Edit the draft', assigneeId: editor.id, channelId: dm.id }, humanActor(owner.id));
-    await app.runtime.idle();
-
-    expect(messagesIn(app, dm.id).at(-1)).toMatchObject({ authorId: editor.id, text: 'Edited.' });
-    expect(app.store.getChannel(dm.id)!.memberIds).not.toContain(editor.id);
-    expect(app.workspace.getOrCreateDm(owner.id, writer.id).id).toBe(dm.id);
-  });
-
   it("keeps helpers out of the parent's DM, while they still see what the parent sees", () => {
     const { app, owner } = setup();
     const lead = addAgent(app, 'Lead');
@@ -87,7 +71,7 @@ describe('direct messages', () => {
     const run = app.store.createRun({ agentId: lead.id, channelId: dm.id, initiator: 'human', depth: 0, title: 'x' });
     app.auth.enable(owner, 'a long enough password');
 
-    const [{ helper }] = app.helpers.spawn(app.store.getAgent(lead.id)!, run, [{ title: 'Sub-task', task: 'Do the sub-task' }]);
+    const [helper] = app.helpers.spawn(app.store.getAgent(lead.id)!, run, [{ title: 'Sub-task', job: 'Do the sub-task' }]);
 
     expect(app.store.getChannel(dm.id)!.memberIds).not.toContain(helper.id);
     expect(app.workspace.canSee(app.store.getChannel(dm.id)!, helper.id)).toBe(true);

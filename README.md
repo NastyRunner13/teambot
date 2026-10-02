@@ -1,6 +1,6 @@
 # TeamBot
 
-**An open-source office for AI agents.** Every agent gets its own computer and its own model. Agents work with you and with each other in channels and on a task board, and they can't act without passing your rules.
+**An open-source office for AI agents.** Every agent gets its own computer and its own model. Agents work with you and with each other in chats and channels, and they can't act without passing your rules.
 
 TeamBot is a self-hosted take on products like xAI Grok Bot, OpenAI Dots and Manus Cue. Unlike them, each agent has a separate, isolated computer, you choose any model per agent through [OpenRouter](https://openrouter.ai), and everything runs on your machine. The research behind it is in [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md).
 
@@ -8,11 +8,11 @@ TeamBot is a self-hosted take on products like xAI Grok Bot, OpenAI Dots and Man
 
 ## What you get
 
-- **A team of named agents.** Each has a role, instructions and its own model (Claude, GPT, Gemini, Grok, DeepSeek, Qwen… anything on OpenRouter that supports tool calling). When work splits into parts, an agent can start up to five short-lived **helpers** that work in parallel, share its budget, report back through the task board and leave when they are done.
+- **A team of named agents.** Each has a role, instructions and its own model (Claude, GPT, Gemini, Grok, DeepSeek, Qwen… anything on OpenRouter that supports tool calling). When work splits into parts, an agent can start up to five short-lived **helpers** that work in parallel, share its budget, report back to it and leave as soon as they do.
 - **A computer per agent.** It's an isolated Linux container with a terminal, files and a Chromium browser. You can **watch it live** and **take control** (to sign in, enter a 2FA code or solve a CAPTCHA), then hand it back. Logins persist. A **setup script** per agent installs its tools, an agent can run on its **own base image**, idle computers **go to sleep** and wake on the next task, and **snapshots** save and restore an agent's whole home folder. Turn on **full desktop control** for an agent to let it see the screen and use the mouse and keyboard in any app, and give it an **internet allowlist** to limit which sites it can reach.
 - **Coding agents.** For substantial programming work, an agent can hand a task to Claude Code, Codex or Gemini CLI running inside its own computer (add the matching API key as a secret), then check the result.
 - **Channels, DMs and threads.** Mention `@Name` to give an agent work, or reply in an agent's thread to keep talking to it. Attach files to any message (they land in `/shared/uploads`). A channel can have a **lead** agent that answers messages that mention nobody. Agents talk to each other the same way, and a loop guard stops endless agent-to-agent ping-pong.
-- **Tasks between agents.** Agents create tasks, assign them to each other, set dependencies (`depends_on`) and hand them off; you see the results in your chats. Assignees are notified, dependents are woken up when their blockers are done, and tasks that go quiet get a **follow-up**.
+- **Progress you can follow.** For any job with several steps, an agent writes its plan as a checklist and ticks it off as it works; the chat shows the step it is on, and the finished reply keeps the whole list. There is no task board: agents hand each other work by message, and you see "Messaged Job Scout" in your chat when they do.
 - **Governance.** Every tool call passes a policy check: **allow / review / ask / deny / hand off**. By default, agents ask before clicking Send, Pay, Delete and similar buttons, hand password and card fields to you, and send risky shell commands to an independent **reviewer model** that approves, escalates to you, or blocks them. Rules can add [CEL](https://cel.dev) conditions (`when: "spend_today > 5.0"`, out-of-hours rules and so on). Approvals show up in the chat where the agent asked (marked in the conversation list) and on your phone.
 - **Budgets.** Daily and monthly dollar caps and daily token caps per agent, plus a workspace-wide daily cap. Work over budget waits in the queue instead of running.
 - **Prompt-injection defence.** Web pages, files, command output, MCP results and webhook bodies reach the model inside `<untrusted_content>` tags it is told never to take orders from.
@@ -69,7 +69,7 @@ flowchart LR
   S --> DB[("SQLite: state + append-only event log")]
 ```
 
-- **Runtime** (`apps/server/src/runtime`): an agent's inbox (mentions, DMs, thread replies, task notices, routines, webhooks) becomes a *run*. Each step checks the agent's budget, then calls its model with a fresh system prompt (team roster, open tasks, skills, memory, available secret names). New messages that arrive mid-run are folded into the same run. Long runs are compacted with a cheap utility model.
+- **Runtime** (`apps/server/src/runtime`): an agent's inbox (mentions, DMs, thread replies, helpers' results, routines, webhooks) becomes a *run*. Each step checks the agent's budget, then calls its model with a fresh system prompt (team roster, skills, memory, available secret names). New messages that arrive mid-run are folded into the same run. Long runs are compacted with a cheap utility model.
 - **Gateway** (`runtime.ts` → `handleCall`): it validates arguments, collects facts (for a click, which button and on which site), evaluates the policy, asks the reviewer model when a rule says `review`, and pauses for a human when needed. It fills in secrets, executes, scrubs the output, tags outside content as untrusted and records everything.
 - **Computers** (`computer/`): Debian with Xvfb, Fluxbox, Chromium (driven over CDP so you see what the agent does), x11vnc and `computerd`, a small authenticated tool API. There is one container plus one disk volume per agent.
 - **Policy** (`apps/server/src/policy.ts`): YAML you can edit in **Settings**. Rules match on tool, agent, initiator (human / agent / schedule / event), domain, the target element's label, field type and arguments. The strictest match wins.
@@ -93,7 +93,6 @@ All settings are environment variables (see [.env.example](.env.example)):
 | `TEAMBOT_MAX_STEPS_PER_RUN` | `40` | Model calls per run before the agent stops and asks. |
 | `TEAMBOT_MAX_CONCURRENT_RUNS` | `4` | Agents working at the same time. |
 | `TEAMBOT_MAX_AGENT_DEPTH` | `6` | Agent-to-agent hops allowed without a human. |
-| `TEAMBOT_STALE_TASK_HOURS` | `4` | Follow up with an agent whose task has had no update for this long (`0` turns it off). |
 | `TEAMBOT_OFFLINE_MODELS` | (off) | `1` makes every agent answer with a canned echo, for trying the app without a key or cost. |
 | `TEAMBOT_MASTER_KEY` | auto-generated | 32-byte base64 key for secrets (otherwise `data/master.key`). |
 | `TEAMBOT_PUBLIC_URL` | (none) | The address people open TeamBot at when it isn't this machine, e.g. `https://teambot.example.com`. Used for connector sign-in callbacks and secure cookies. |

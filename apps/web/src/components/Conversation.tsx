@@ -111,7 +111,7 @@ function useWorkNotes(messages: Message[]): Map<string, RunSummary> {
       seen.add(m.runId);
       const run = summaries[m.runId];
       // A message an agent sent elsewhere gets no note there: the work belongs to the conversation it was done for.
-      if (run && run.channelId === m.channelId && !active[run.id] && run.toolCalls > 0) notes.set(m.id, run);
+      if (run && run.channelId === m.channelId && !active[run.id] && (run.toolCalls > 0 || run.progress.length > 0)) notes.set(m.id, run);
     }
     return notes;
   }, [messages, summaries, active]);

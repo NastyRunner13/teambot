@@ -70,7 +70,7 @@ export function AgentChat({ id }: { id: string }) {
                 <Avatar member={agent} size={96} />
                 <h1>{agent.name}</h1>
                 <p>{agent.role || 'Your AI teammate'}</p>
-                <p className="small faint">Share a task, ask a question, or talk through an idea. It starts working right away.</p>
+                <p className="small faint">Give it a job, ask a question, or talk through an idea. It starts working right away.</p>
               </div>
             }
           />

@@ -64,7 +64,7 @@ TeamBot is a self-hosted office for named AI agents. People return to a conversa
 
 The October 2 2026 redesign follows [Grok Bot](https://x.ai/bot) at the owner's request: a deep-black canvas, a conversation list with previews, bubble messages with a floating name pill, a profile panel with Details, Library and Computer, routines with on/off switches, and a "Connect apps" entry at the bottom of the sidebar. It is drawn from scratch; no Grok artwork, icons or code are used.
 
-What changed from the first design: the Activity, Approvals and Tasks pages are gone. Approvals appear in the conversation where the agent asked; what agents did shows in the conversation as work notes; tasks remain something agents use among themselves (search still finds them). Skills, shared files, connectors and chat bridges live together under Connect apps.
+What changed from the first design: the Activity, Approvals and Tasks pages are gone. Approvals appear in the conversation where the agent asked; what agents did shows in the conversation as work notes. Later the same day the task board went altogether: agents show their plan as a progress checklist instead. Skills, shared files, connectors and chat bridges live together under Connect apps.
 
 ## Colors
 
@@ -107,7 +107,11 @@ When an agent working for a conversation messages someone elsewhere, the convers
 
 ### Work notes
 
-While an agent works for a conversation, one live line at the bottom says what it is doing now ("Search history for …", "Waiting for your approval"), with a shimmer, led by the agent's name unless it's the one you're chatting with. It expands to the steps so far, Full log, Watch its computer and Stop. When the run finishes, a collapsed note sits above its first message: "Worked for 2m 14s · 9 steps". Expanded, it lists only actions and outcomes (tool calls, a human's answers, failures, budget stops), not the model's thinking. Runs that took no actions get no note.
+While an agent works for a conversation, one live line at the bottom says what it is doing now ("Search history for …", "Waiting for your approval"), with a shimmer, led by the agent's name unless it's the one you're chatting with. An agent on a job with several steps keeps a plan (the `update_progress` checklist): then the line names the step it is on with a count ("Deep-dive tiers… · 1 of 4"), and the checklist shows below it, open by default, every step listed: done ones checked, the current one spinning, the rest as empty circles. Without a plan the line expands to the actions so far. Either way it ends with Full log, Watch its computer and Stop. Helpers working for the agent get their own live lines.
+
+When the run finishes, a collapsed note sits above its first message: "Worked for 2m 14s · 5 steps" (the plan's steps, or "3 of 5 steps done" if it stopped short; without a plan, the number of actions). Expanded, it shows the plan, or else only actions and outcomes (tool calls, a human's answers, failures, budget stops), never the model's thinking. Runs with neither get no note. The run's page in the panel shows the plan above the full log.
+
+There is no task board. Agents hand each other work by message (see the "Messaged …" line above), and a helper's result goes to the agent that started it rather than into the chat.
 
 ### Agent profile
 

@@ -1,9 +1,10 @@
 // What an agent did for its reply, inside the conversation: one live line while it works, then a short note
-// above the reply ("Worked for 2m 14s · 9 steps") that opens to the steps that mattered. Every detail is one
-// click away in the panel's full log.
+// above the reply ("Worked for 2m 14s · 5 steps") that opens to its plan — the checklist it kept with
+// update_progress — or, without one, to the actions that mattered. Every detail is one click away in the panel's
+// full log.
 import { Ban, Check, ChevronRight, CircleAlert, Hand, Loader2, Monitor, ShieldQuestion, Square, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { EventRecord, Run, RunSummary } from '@teambot/shared';
+import { PROGRESS_TOOL, type EventRecord, type ProgressStep, type Run, type RunSummary } from '@teambot/shared';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Avatar } from './Avatar';
@@ -23,6 +24,7 @@ function stepsOf(events: EventRecord[]): Step[] {
   for (const e of events) {
     const d = e.data as Record<string, any>;
     if (e.type === 'tool.checked') {
+      if (d.tool === PROGRESS_TOOL) continue; // the plan shows as the checklist, not as an action
       const state: StepState = d.action === 'deny' ? 'blocked' : d.action === 'ask' || d.action === 'handoff' ? 'asking' : 'running';
       const step: Step = { key: `t${e.id}`, state, text: d.summary };
       byCall.set(d.toolCallId, step);
@@ -57,8 +59,32 @@ function nowDoing(run: Run, steps: Step[]): string {
     case 'queued':
       return 'About to start';
   }
+  const planned = run.progress.find((s) => s.status === 'in_progress');
+  if (planned) return planned.text;
   const current = [...steps].reverse().find((s) => s.state === 'running');
   return current ? current.text : 'Thinking';
+}
+
+/** "2 of 5", for a plan in progress. */
+function progressCount(steps: ProgressStep[]): string {
+  return `${steps.filter((s) => s.status === 'done').length} of ${steps.length}`;
+}
+
+/** An agent's plan for a run: every step, the finished ones checked and, while it works, the current one spinning. */
+export function ProgressList({ steps, live = false }: { steps: ProgressStep[]; live?: boolean }) {
+  return (
+    <ol className="progress-list" aria-label="Progress">
+      {steps.map((s, i) => {
+        const state = s.status === 'done' ? 'ok' : s.status === 'in_progress' && live ? 'running' : 'pending';
+        return (
+          <li key={i} className={`work-step ${state}`}>
+            <span className="work-step-icon">{state === 'ok' ? <Check size={12} /> : state === 'running' ? <Loader2 size={12} className="spin" /> : null}</span>
+            <span className="work-step-text">{s.text}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 export function duration(ms: number): string {
@@ -79,11 +105,13 @@ const ICON: Record<StepState, React.ReactNode> = {
   stopped: <Square size={10} />,
 };
 
-function StepList({ steps, runId, children }: { steps: Step[] | null; runId: string; children?: React.ReactNode }) {
+function StepList({ steps, runId, progress, live, children }: { steps: Step[] | null; runId: string; progress: ProgressStep[]; live?: boolean; children?: React.ReactNode }) {
   const openRun = useStore((s) => s.openRun);
   return (
     <div className="work-steps">
-      {steps === null ? (
+      {progress.length ? (
+        <ProgressList steps={progress} live={live} />
+      ) : steps === null ? (
         <div className="work-step muted">Loading…</div>
       ) : steps.length === 0 ? (
         <div className="work-step muted">No actions yet.</div>
@@ -105,23 +133,26 @@ function StepList({ steps, runId, children }: { steps: Step[] | null; runId: str
   );
 }
 
-/** Above an agent's reply: how long it worked and what it did. Steps load when opened. */
+/** Above an agent's reply: how long it worked, and its plan or (without one) its actions. Actions load when opened. */
 export function WorkNote({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false);
-  const events = useRunEvents(open ? run.id : null);
+  const plan = run.progress;
+  const events = useRunEvents(open && !plan.length ? run.id : null);
   const steps = useMemo(() => (open && events.length ? stepsOf(events) : null), [open, events]);
   const took = duration(new Date(run.updatedAt).getTime() - new Date(run.createdAt).getTime());
   const failed = run.status === 'failed' || run.status === 'cancelled';
+  const done = plan.filter((s) => s.status === 'done').length;
+  const count = plan.length ? (done < plan.length ? `${progressCount(plan)} steps done` : `${plan.length} ${plan.length === 1 ? 'step' : 'steps'}`) : `${run.toolCalls} ${run.toolCalls === 1 ? 'step' : 'steps'}`;
   return (
     <div className={`work-note ${open ? 'open' : ''}`}>
       <button type="button" className="work-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <ChevronRight size={14} className="chev" />
         {failed ? <CircleAlert size={13} className="bad" /> : null}
         <span>
-          {failed ? 'Stopped after' : 'Worked for'} {took} · {run.toolCalls} {run.toolCalls === 1 ? 'step' : 'steps'}
+          {failed ? 'Stopped after' : 'Worked for'} {took} · {count}
         </span>
       </button>
-      {open && <StepList steps={steps} runId={run.id} />}
+      {open && <StepList steps={steps} runId={run.id} progress={plan} />}
     </div>
   );
 }
@@ -131,7 +162,9 @@ export function LiveWork({ run, showName, onOpenThread }: { run: Run; showName: 
   const agent = useStore((s) => s.agents.find((a) => a.id === run.agentId));
   const openDock = useStore((s) => s.openDock);
   const notify = useStore((s) => s.notify);
-  const [open, setOpen] = useState(false);
+  // A plan stays in view while the agent works on it, unless you fold it away.
+  const [toggled, setOpen] = useState<boolean | null>(null);
+  const open = toggled ?? run.progress.length > 0;
   const events = useRunEvents(run.id);
   const steps = useMemo(() => stepsOf(events), [events]);
   const doing = nowDoing(run, steps);
@@ -155,12 +188,13 @@ export function LiveWork({ run, showName, onOpenThread }: { run: Run; showName: 
             {doing}
             {waiting ? '' : '…'}
           </span>
+          {run.progress.length > 0 && <span className="faint"> · {progressCount(run.progress)}</span>}
           {run.threadId && onOpenThread && <span className="faint"> · in a thread</span>}
         </span>
         <ChevronRight size={14} className="chev" />
       </button>
       {open && (
-        <StepList steps={steps} runId={run.id}>
+        <StepList steps={steps} runId={run.id} progress={run.progress} live={run.status === 'running'}>
           {run.threadId && onOpenThread && (
             <button type="button" className="link-btn" onClick={onOpenThread}>
               Open thread

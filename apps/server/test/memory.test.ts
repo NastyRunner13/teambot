@@ -81,13 +81,13 @@ describe('memory', () => {
 });
 
 describe('history search', () => {
-  it('finds past messages and tasks where every word matches', async () => {
+  it('finds past messages where every word matches', async () => {
     const { app, models, owner } = setup();
     const ops = addAgent(app, 'Ops');
     const launch = app.workspace.createChannel({ name: 'launch', memberIds: [] }, owner.id);
     app.workspace.postMessage({ channelId: launch.id, authorId: owner.id, text: 'The staging server is staging.example.com, use port 8443' });
     app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: 'Lunch is at noon' });
-    app.workspace.createTask({ title: 'Fix the staging deploy', description: 'Deploys hang at 50% on staging' }, { id: owner.id, depth: 0, initiator: 'human' });
+    app.workspace.postMessage({ channelId: launch.id, authorId: owner.id, text: 'Deploys hang at 50% on staging' });
     models.script('test/ops', [callTool('search_history', { query: 'staging port' }), say('Found it.')]);
 
     app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Ops what was the staging port?' });
@@ -97,8 +97,8 @@ describe('history search', () => {
     expect(result).toContain('#launch — Owner: The staging server is staging.example.com, use port 8443');
     expect(result).not.toContain('Lunch');
 
-    expect(app.store.searchTasks(searchTerms('"50%"')).map((t) => t.title)).toEqual(['Fix the staging deploy']);
-    expect(app.store.searchTasks(searchTerms('5_%'))).toEqual([]);
+    expect(app.store.searchMessages(searchTerms('"50%"')).map((m) => m.text)).toEqual(['Deploys hang at 50% on staging']);
+    expect(app.store.searchMessages(searchTerms('5_%'))).toEqual([]);
     expect(snippet('a '.repeat(200) + 'needle here', ['needle'], 10)).toBe('…a a a a a needle her…');
   });
 });

@@ -11,7 +11,7 @@ import { BudgetFields } from '../BudgetFields';
 import { ComputerFields } from '../ComputerFields';
 import { MemoryEditor } from '../MemoryEditor';
 import { RunTimeline } from '../RunTimeline';
-import { duration } from '../WorkLog';
+import { duration, ProgressList } from '../WorkLog';
 import { PanelPage } from './PanelPage';
 
 export function MemoryPage({ agentId }: { agentId: string }) {
@@ -131,6 +131,11 @@ export function RunPage({ runId }: { runId: string }) {
           {run.status.replace('_', ' ')} · {duration(new Date(run.updatedAt).getTime() - new Date(run.createdAt).getTime())} · {run.steps} model calls · {tokens(run.tokensIn)} in /{' '}
           {tokens(run.tokensOut)} out · {money(run.costUsd)} · started by a {run.initiator}
           {run.error && <div className="error-text">{run.error}</div>}
+        </div>
+      )}
+      {run && run.progress.length > 0 && (
+        <div className="work-steps run-progress">
+          <ProgressList steps={run.progress} live={active} />
         </div>
       )}
       <RunTimeline runId={runId} />

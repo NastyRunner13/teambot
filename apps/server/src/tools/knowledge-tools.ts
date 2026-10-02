@@ -39,7 +39,7 @@ export function knowledgeTools(): ToolDef[] {
     defineTool({
       name: 'remember',
       description:
-        'Save a lasting fact or preference to long-term memory, e.g. "The owner wants reports in British English" or "Staging is at staging.example.com". Not for task progress or secrets.',
+        'Save a lasting fact or preference to long-term memory, e.g. "The owner wants reports in British English" or "Staging is at staging.example.com". Not for progress on a job, or secrets.',
       risk: 'internal',
       schema: z.object({ note: z.string().min(3).max(500), scope: Scope }),
       summarize: (a) => `Remember${a.scope === 'team' ? ' for the team' : ''}: ${a.note.length > 80 ? `${a.note.slice(0, 80)}…` : a.note}`,
@@ -68,7 +68,7 @@ export function knowledgeTools(): ToolDef[] {
 
     defineTool({
       name: 'search_history',
-      description: 'Search past messages in every channel and DM, and the task board. All words must match. Use it to find earlier decisions, links and results.',
+      description: 'Search past messages in every channel and DM. All words must match. Use it to find earlier decisions, links and results.',
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({
@@ -79,11 +79,8 @@ export function knowledgeTools(): ToolDef[] {
       async execute(a, ctx) {
         const ws = ctx.app.workspace;
         const r = search(ctx.app, a.query, { limit: a.limit ?? 15, viewerId: ctx.agent.id, workingIn: ctx.run.channelId });
-        if (!r.messages.length && !r.tasks.length) return `Nothing found for "${a.query}".`;
-        const lines = [
-          ...r.messages.map((h) => `[${h.message.createdAt.slice(0, 16).replace('T', ' ')}] ${h.where} — ${ws.memberName(h.message.authorId)}: ${h.snippet}`),
-          ...r.tasks.map((h) => `Task ${ws.taskLine(h.task)}\n    ${h.snippet}`),
-        ];
+        if (!r.messages.length) return `Nothing found for "${a.query}".`;
+        const lines = r.messages.map((h) => `[${h.message.createdAt.slice(0, 16).replace('T', ' ')}] ${h.where} — ${ws.memberName(h.message.authorId)}: ${h.snippet}`);
         return markMissingFiles(ctx.app.cfg.sharedDir, `Results for "${a.query}" (newest first):\n${lines.join('\n')}`);
       },
     }),
