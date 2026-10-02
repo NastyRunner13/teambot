@@ -103,9 +103,11 @@ Each row: avatar (40px), name, and one line of preview — the last message with
 
 Your messages are right-aligned bubbles; everyone else's are left-aligned. In a chat with one agent its name isn't repeated; in group chats the author's avatar and name head each run of messages. Hovering shows the time, Reply (thread) and Copy. System notices (📋, ⚠️) are centered muted text without a bubble.
 
+When an agent working for a conversation messages someone elsewhere, the conversation shows a centered line at that point: "Messaged [blob] Job Scout", "Messaged you" or "Posted in #launch", with the author's name first when it isn't the agent you're chatting with. Several posts in a row to the same place share one line. It opens that conversation. A conversation between two agents has a "Job Scout ⇄ Writer" pill, names the author of every message, and has no composer: a line at the bottom points to your own chat with either agent.
+
 ### Work notes
 
-While an agent works for a conversation, one live line at the bottom says what it is doing now ("Search history for …", "Waiting for your approval"), with a shimmer. It expands to the steps so far, Full log, Watch its computer and Stop. When the run finishes, a collapsed note sits above its first message: "Worked for 2m 14s · 9 steps". Expanded, it lists only actions and outcomes (tool calls, a human's answers, failures, budget stops), not the model's thinking. Runs that took no actions get no note.
+While an agent works for a conversation, one live line at the bottom says what it is doing now ("Search history for …", "Waiting for your approval"), with a shimmer, led by the agent's name unless it's the one you're chatting with. It expands to the steps so far, Full log, Watch its computer and Stop. When the run finishes, a collapsed note sits above its first message: "Worked for 2m 14s · 9 steps". Expanded, it lists only actions and outcomes (tool calls, a human's answers, failures, budget stops), not the model's thinking. Runs that took no actions get no note.
 
 ### Agent profile
 

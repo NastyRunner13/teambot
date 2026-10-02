@@ -27,7 +27,7 @@ import { newId, now } from './util.js';
 
 const LAST_TASK_NUMBER = 'last_task_number';
 
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: string[] = [
   `
   CREATE TABLE humans (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
   CREATE TABLE agents (
@@ -156,6 +156,44 @@ const MIGRATIONS: string[] = [
   INSERT OR IGNORE INTO helper_lineage (agent_id, parent_id)
     SELECT json_extract(data, '$.agent.id'), json_extract(data, '$.parentId') FROM events
     WHERE type = 'agent.created' AND json_extract(data, '$.parentId') IS NOT NULL AND json_extract(data, '$.agent.id') IS NOT NULL;
+  `,
+  // 14: a DM stays between the two members it was opened with. Posting used to add whoever spoke in one (an agent
+  // named there, a helper, a task's assignee), after which the pair got a new, empty DM. Give each DM back the members
+  // its creation event lists, then fold every later DM of the same pair into the oldest one.
+  // Plus: messages each run posted, and runs by conversation, for what agents sent elsewhere while working in one.
+  `
+  DELETE FROM channel_members
+  WHERE channel_id IN (SELECT id FROM channels WHERE kind = 'dm')
+    AND EXISTS (SELECT 1 FROM events e WHERE e.type = 'channel.created' AND e.channel_id = channel_members.channel_id)
+    AND member_id NOT IN (
+      SELECT j.value FROM events e, json_each(e.data, '$.channel.memberIds') j
+      WHERE e.type = 'channel.created' AND e.channel_id = channel_members.channel_id
+    );
+  CREATE TEMP TABLE dm_merge AS
+    WITH pair AS (
+      SELECT c.id, c.created_at,
+        (SELECT group_concat(member_id, ',' ORDER BY member_id) FROM channel_members m WHERE m.channel_id = c.id) AS members,
+        (SELECT COUNT(*) FROM channel_members m WHERE m.channel_id = c.id) AS size
+      FROM channels c WHERE c.kind = 'dm'
+    )
+    SELECT p.id AS dup, (SELECT k.id FROM pair k WHERE k.size = 2 AND k.members = p.members ORDER BY k.created_at, k.id LIMIT 1) AS keep
+    FROM pair p WHERE p.size = 2;
+  DELETE FROM dm_merge WHERE dup = keep;
+  UPDATE messages SET channel_id = (SELECT keep FROM dm_merge WHERE dup = messages.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE tasks SET channel_id = (SELECT keep FROM dm_merge WHERE dup = tasks.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE runs SET channel_id = (SELECT keep FROM dm_merge WHERE dup = runs.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE inbox SET channel_id = (SELECT keep FROM dm_merge WHERE dup = inbox.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE approvals SET channel_id = (SELECT keep FROM dm_merge WHERE dup = approvals.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE schedules SET channel_id = (SELECT keep FROM dm_merge WHERE dup = schedules.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE bridge_links SET channel_id = (SELECT keep FROM dm_merge WHERE dup = bridge_links.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE events SET channel_id = (SELECT keep FROM dm_merge WHERE dup = events.channel_id) WHERE channel_id IN (SELECT dup FROM dm_merge);
+  UPDATE settings SET value = (SELECT replace(settings.value, dup, keep) FROM dm_merge WHERE instr(settings.value, dup) > 0)
+    WHERE key LIKE '%_last_target' AND EXISTS (SELECT 1 FROM dm_merge WHERE instr(settings.value, dup) > 0);
+  DELETE FROM channel_members WHERE channel_id IN (SELECT dup FROM dm_merge);
+  DELETE FROM channels WHERE id IN (SELECT dup FROM dm_merge);
+  DROP TABLE dm_merge;
+  CREATE INDEX messages_run ON messages(run_id);
+  CREATE INDEX runs_channel ON runs(channel_id, created_at);
   `,
 ];
 
@@ -654,6 +692,16 @@ export class Store {
        FROM messages m WHERE m.channel_id = :channelId AND m.thread_id IS NULL ${opts.before ? 'AND m.created_at < :before' : ''}
        ORDER BY m.created_at DESC, m.rowid DESC LIMIT :limit`,
       { channelId, before: opts.before, limit: opts.limit ?? 50 },
+    );
+    return rows.map(toMessage).reverse();
+  }
+  /** What agents posted in other conversations while working in this one (messaging a teammate), oldest first. */
+  listSentElsewhere(channelId: string, opts: { limit?: number } = {}): Message[] {
+    const rows = this.all(
+      `SELECT m.* FROM runs r JOIN messages m ON m.run_id = r.id
+       WHERE r.channel_id = :channelId AND m.channel_id != :channelId
+       ORDER BY m.created_at DESC, m.rowid DESC LIMIT :limit`,
+      { channelId, limit: opts.limit ?? 60 },
     );
     return rows.map(toMessage).reverse();
   }

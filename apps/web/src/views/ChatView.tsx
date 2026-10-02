@@ -1,7 +1,7 @@
 // A chat: with one agent (/agents/:id) or a group (/c/:id), with the details panel beside it.
-import { ArrowUpRight, PanelRight } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Redirect, useLocation, useSearch } from 'wouter';
+import { ArrowLeftRight, ArrowUpRight, PanelRight } from 'lucide-react';
+import { Fragment, useEffect, useState } from 'react';
+import { Link, Redirect, useLocation, useSearch } from 'wouter';
 import type { Agent, Channel } from '@teambot/shared';
 import { api } from '../api';
 import { Avatar, Blob, GroupAvatar, shapeOf } from '../components/Avatar';
@@ -87,30 +87,70 @@ export function ChannelChat({ id }: { id: string }) {
   const channel = useStore((s) => s.channels.find((c) => c.id === id));
   const me = useStore((s) => s.me);
   const agents = useStore((s) => s.agents);
+  const notify = useStore((s) => s.notify);
   if (!channel) return <div className="center-fill muted">This chat doesn't exist.</div>;
   const members = agents.filter((a) => channel.memberIds.includes(a.id));
-  // A chat with an agent lives on the agent's page.
-  if (channel.kind === 'dm' && members.length) return <Redirect to={`/agents/${members[0].id}`} replace />;
+  const mine = !!me && channel.memberIds.includes(me.id);
+  // My chat with an agent lives on the agent's page.
+  if (channel.kind === 'dm' && members.length && mine) return <Redirect to={`/agents/${members[0].id}`} replace />;
+  // Agents messaging each other: you can follow along, and step in from your own chat with either.
+  const between = channel.kind === 'dm' && !mine;
   const title = channelTitle(channel, me?.id);
-  const partner = channel.kind === 'dm' ? channel.memberIds.find((m) => m !== me?.id) : undefined;
+  const partner = channel.kind === 'dm' && mine ? channel.memberIds.find((m) => m !== me?.id) : undefined;
 
   return (
     <div className="chat-layout">
       <section className="chat">
         <ChatTop label={title}>
-          {channel.kind === 'channel' ? <GroupAvatar agents={members} size={22} /> : null}
-          <span className="ellipsis">{title}</span>
+          {between ? (
+            members.map((a, i) => (
+              <Fragment key={a.id}>
+                {i > 0 && <ArrowLeftRight size={14} className="faint" aria-label="and" />}
+                <Avatar member={a} size={22} status />
+                <span className="ellipsis">{a.name}</span>
+              </Fragment>
+            ))
+          ) : (
+            <>
+              {channel.kind === 'channel' ? <GroupAvatar agents={members} size={22} /> : null}
+              <span className="ellipsis">{title}</span>
+            </>
+          )}
         </ChatTop>
         <Conversation
           channelId={channel.id}
           partnerId={partner}
           placeholder={channel.kind === 'channel' ? `Message ${title} — @mention an agent to put it to work` : `Message ${title}`}
+          readOnly={
+            between && members.length ? (
+              <>
+                {members
+                  .filter((a) => a.paused)
+                  .map((a) => (
+                    <p key={a.id} className="read-only-paused">
+                      <strong>{a.name}</strong> is paused: messages to it wait until you resume it.{' '}
+                      <button type="button" className="link-btn" onClick={() => api.post(`/agents/${a.id}/resume`).catch((err) => notify((err as Error).message, 'error'))}>
+                        Resume {a.name}
+                      </button>
+                    </p>
+                  ))}
+                Only {members.map((a) => a.name).join(' and ')} write here. To step in, message{' '}
+                {members.map((a, i) => (
+                  <Fragment key={a.id}>
+                    {i > 0 && ' or '}
+                    <Link href={`/agents/${a.id}`}>{a.name}</Link>
+                  </Fragment>
+                ))}
+                .
+              </>
+            ) : undefined
+          }
           empty={
             <div className="hero">
               <GroupAvatar agents={members} size={88} />
               <h1>{title}</h1>
-              <p>{channel.topic || (channel.kind === 'channel' ? 'A group chat for your team and its agents.' : 'Your direct messages.')}</p>
-              {members[0] && (
+              <p>{channel.topic || (channel.kind === 'channel' ? 'A group chat for your team and its agents.' : between ? 'Nothing sent here yet.' : 'Your direct messages.')}</p>
+              {members[0] && !between && (
                 <p className="small faint">
                   Mention <strong>@{members[0].name}</strong> to get things moving.
                 </p>

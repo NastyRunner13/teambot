@@ -209,7 +209,7 @@ No single product, open or closed, covers all six of these:
 
 ### P0: MVP, "a team in a box" (single user, self-hosted) ✅ built
 
-*Built on 2026-10-01; see the [README](../README.md). Message threads and file attachments, missing from the first build, were added during the P0 review on 2026-10-01, along with fixes for two screens that crashed (Routines tab, New task dialog), dialogs that ignored their first field, and partial agent and routine updates that reset other fields. Not yet in it: MCP servers are connected on the host rather than inside each computer, and "Always allow" from an approval is not offered (edit the policy instead). Postgres was replaced by SQLite (decision 6).*
+*Built on 2026-10-01; see the [README](../README.md). Message threads and file attachments, missing from the first build, were added during the P0 review on 2026-10-01, along with fixes for two screens that crashed (Routines tab, New task dialog), dialogs that ignored their first field, and partial agent and routine updates that reset other fields. Not yet in it: MCP servers are connected on the host rather than inside each computer, and "Always allow" from an approval is not offered (edit the policy instead). Postgres was replaced by SQLite (decision 6). Since the [redesign](#redesign-a-grok-style-chat-workspace-2026-10-02--built) the approvals inbox, Activity timeline and task board are no longer pages of their own: approvals and work notes sit in the conversation they belong to, and tasks are what agents track among themselves.*
 
 1. `docker compose up` brings up the API, web UI, Postgres, scheduler and computer pool.
 2. **Agent roster:** create named agents with a role, instructions, avatar and **model of your choice**.
@@ -221,7 +221,7 @@ No single product, open or closed, covers all six of these:
 8. **Activity timeline and audit log** from the event log.
 9. **MCP client** and **cron schedules**.
 
-**MVP acceptance demo:** Create *Lead*, *Researcher* and *Writer* in `#launch`. Post a goal. Lead creates three tasks with dependencies. Researcher browses in its own computer while you watch live. Writer drafts in `/shared` and asks approval before sending an email. You approve from the inbox. Every step shows in the audit log.
+**MVP acceptance demo:** Create *Lead*, *Researcher* and *Writer* in `#launch`. Post a goal. Lead creates three tasks with dependencies. Researcher browses in its own computer while you watch live. Writer drafts in `/shared` and asks approval before sending an email. You approve in the chat where it asked. Every step shows in the audit log.
 
 ### P1: "a coworker you can trust" (first public release) — done
 
@@ -244,8 +244,8 @@ No single product, open or closed, covers all six of these:
 | Untrusted-content tagging | ✅ Browser, file, shell, MCP, webhook, email, Slack and calendar content is wrapped in `<untrusted_content>`. |
 | Spend and token budgets | ✅ Daily/monthly USD and daily token caps per agent, plus a workspace daily cap. Helpers share their parent's budget. |
 | CEL policies | ✅ Optional `when:` on any rule (CEL via `@marcbachmann/cel-js`): tool, risk, agent, initiator, domain, args, time of day, weekday and spend today. A broken expression is rejected on save; one that fails at run time makes restrictive rules match and allow rules not (fails closed). |
-| Egress proxy and allowlists | ✅ Per agent: open, or an allowlist of domains. Restricted computers are firewalled (iptables, set from outside the container) so their own proxy port is the only way out; blocked requests show up in the agent's Computer tab and Activity. Works with the server on the host or in Docker Compose. |
-| Skills (SKILL.md) | ✅ Files in `data/skills`, editor in the app, per-agent access, supporting files copied to the computer. |
+| Egress proxy and allowlists | ✅ Per agent: open, or an allowlist of domains. Restricted computers are firewalled (iptables, set from outside the container) so their own proxy port is the only way out; blocked requests show up under Blocked sites in the Computer tab of the agent's panel. Works with the server on the host or in Docker Compose. |
+| Skills (SKILL.md) | ✅ Files in `data/skills`, editor under Connect apps → Skills, per-agent access, supporting files copied to the computer. |
 | Routines with skill and trigger | ✅ Cron, webhook, email, Slack and calendar triggers, optional skill, read-only mode. |
 | Event triggers | ✅ Webhooks; email over IMAP (Gmail with an app password), with attachments saved to `/shared`; messages in a Slack channel; upcoming events in any iCal feed (recurring events and time zones handled). Passwords and private feed URLs are reserved secrets. |
 | Proactive mode | ✅ Read-only routines for monitoring; follow-ups on quiet and blocked tasks. |
@@ -257,11 +257,24 @@ No single product, open or closed, covers all six of these:
 | Full GUI desktop computer use | ✅ Opt-in per agent: screenshots plus mouse and keyboard tools on the whole desktop (xdotool), with clicks described to the policy by what is under the pointer. |
 | Coding-agent adapter | ✅ `run_coding_agent` runs Claude Code, Codex or Gemini CLI inside the agent's computer, offered when its API key is a stored secret; the key goes to the CLI's environment only. |
 | Helpers (sub-agents) | ✅ `spawn_helpers` starts up to five short-lived agents with the parent's settings, one task each; they share the parent's budget and leave when their task is closed. |
-| OAuth app connectors | ✅ Remote MCP servers added in Settings → Connectors with OAuth sign-in (discovery, dynamic client registration, PKCE and refresh via the MCP SDK). Tokens are reserved secrets; tools are opted into per agent and default to `ask`. |
+| OAuth app connectors | ✅ Remote MCP servers added under Connect apps → Apps with OAuth sign-in (discovery, dynamic client registration, PKCE and refresh via the MCP SDK). Tokens are reserved secrets; tools are opted into per agent and default to `ask`. |
 | Multi-user workspace | ✅ Off by default. Team sign-in (name and password, scrypt, HttpOnly cookie sessions), one-time invite links, owner and member roles, actions attributed to the signed-in person, private DMs, owner-only settings. |
 | OpenTelemetry export | ✅ OTLP/HTTP JSON without an SDK: the audit log as logs, each run as a trace with tool and model spans. |
 
 Not done, on purpose: the database stays SQLite. One server with a small team fits it well; Postgres moves to P2 together with SSO and finer roles.
+
+### Redesign: a Grok-style chat workspace (2026-10-02) ✅ built
+
+*Done after P1, at the owner's request. The full design is in [design.md](../design.md).*
+
+- **A chat app first:** conversations newest first with previews and status, one conversation with bubbles and a floating name pill, and a panel beside it with the agent's Details (status, routines with switches, Customize, Memory), Library (files it shared) and Computer (live screen, take control, blocked sites, setup script, snapshots).
+- **Approvals** appear in the conversation where the agent asked, with decision buttons, and the conversation list marks chats waiting on you. The Approvals page is gone.
+- **Activity became work notes:** a live line while an agent works for a chat, a "Worked for … · N steps" note above its reply, and the run's full log in the panel. The Activity page is gone.
+- **Tasks** are what agents track among themselves (task tools, 📋 notes in the chat, follow-ups on quiet tasks). Search still finds them. The Tasks page is gone, and old `/tasks`, `/approvals` and `/activity` links redirect.
+- **Agents messaging each other:** your chat shows "Messaged Job Scout" where it happened, and that opens the two agents' conversation, which you can read but not post in (you step in from your own chat with either agent). Each live line names the agent when it isn't the one you're chatting with.
+- **A DM stays between its two members.** Naming a teammate in a chat with an agent leaves it to that agent to bring them in, instead of waking them in your DM. Helpers and task assignees who work in a DM speak there without joining it. A one-time migration repaired DMs that had gained members and merged the empty copies the app had opened back into them.
+- **Connect apps** gathers MCP connectors, `mcp.json` servers, Telegram, Slack, skills and shared files on one page.
+- Deep-black theme by default, with Light and Auto; agents are blob characters in their own color.
 
 ### P2: teams and ecosystem
 

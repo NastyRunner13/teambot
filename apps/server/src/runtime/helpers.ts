@@ -39,6 +39,14 @@ export async function removeAgent(app: App, agent: Agent, actorId: string | null
   for (const helper of store.listAgents().filter((a) => a.parentId === agent.id)) await removeAgent(app, helper, actorId);
   for (const run of store.listRuns({ agentId: agent.id, statuses: ACTIVE_RUN_STATUSES })) runtime.cancelRun(run.id, actorId ?? agent.id);
   for (const s of store.listSchedules()) if (s.agentId === agent.id) vault.delete(routineSecret(s.id));
+  // Its unfinished tasks end with it. Left open and unassigned, they read as abandoned work any teammate may pick up,
+  // which nobody asked for. Quietly: telling their creators would set them re-planning.
+  for (const task of store.listTasks()) {
+    if (task.assigneeId !== agent.id || task.status === 'done' || task.status === 'cancelled') continue;
+    const note = { authorId: actorId ?? agent.id, text: `Cancelled: ${agent.name} was removed from the team.`, at: new Date().toISOString() };
+    const saved = store.saveTask({ ...task, status: 'cancelled', notes: [...task.notes, note] });
+    bus.emit('task.updated', { actorId, agentId: agent.id, channelId: task.channelId }, { task: saved, before: task });
+  }
   store.deleteAgent(agent.id);
   app.memory.remove(agent.name);
   app.snapshots.removeAll(agent.id);
@@ -87,7 +95,8 @@ export class Helpers {
         parentId: parent.id,
       });
       bus.emit('agent.created', { actorId: parent.id, agentId: helper.id }, { agent: helper, parentId: parent.id });
-      if (run.channelId) workspace.addMember(run.channelId, helper.id, parent.id);
+      // It joins a group chat it works in; a DM stays between its two members.
+      if (run.channelId && store.getChannel(run.channelId)?.kind === 'channel') workspace.addMember(run.channelId, helper.id, parent.id);
       const task = workspace.createTask(
         { title: spec.title, description: spec.task, assigneeId: helper.id, channelId: run.channelId },
         { id: parent.id, depth: run.depth, initiator: run.initiator, runId: run.id },

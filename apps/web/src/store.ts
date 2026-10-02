@@ -69,6 +69,8 @@ interface State {
   messages: Record<string, Message[]>;
   /** Thread replies per root message id. */
   threads: Record<string, Message[]>;
+  /** Per conversation: what agents posted elsewhere while working in it, such as a message to a teammate. */
+  sent: Record<string, Message[]>;
   events: EventRecord[];
   panel: PanelState;
   sidebarCollapsed: boolean;
@@ -147,6 +149,7 @@ export const useStore = create<State>((set, get) => ({
   health: null,
   messages: {},
   threads: {},
+  sent: {},
   events: [],
   // Where the panel covers the chat (narrow windows) it starts closed; on wide ones it stays as you left it.
   panel: { open: !overlayPanel() && (remembered('teambot-panel') ?? (window.innerWidth >= 1280 ? 'open' : 'closed')) === 'open', tab: 'details', agentId: null, view: null, at: '' },
@@ -187,12 +190,19 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadMessages(channelId) {
-    const msgs = await api.get<Message[]>(`/channels/${channelId}/messages?limit=100`);
-    set((s) => {
-      const live = s.messages[channelId] ?? [];
-      const seen = new Set(msgs.map((m) => m.id));
-      return { messages: { ...s.messages, [channelId]: [...msgs, ...live.filter((m) => !seen.has(m.id))] } };
-    });
+    const [msgs, sent] = await Promise.all([
+      api.get<Message[]>(`/channels/${channelId}/messages?limit=100`),
+      api.get<Message[]>(`/channels/${channelId}/sent?limit=100`).catch(() => [] as Message[]),
+    ]);
+    // Keep what arrived live while these loaded.
+    const merge = (loaded: Message[], live: Message[] = []) => {
+      const seen = new Set(loaded.map((m) => m.id));
+      return [...loaded, ...live.filter((m) => !seen.has(m.id))];
+    };
+    set((s) => ({
+      messages: { ...s.messages, [channelId]: merge(msgs, s.messages[channelId]) },
+      sent: { ...s.sent, [channelId]: merge(sent, s.sent[channelId]) },
+    }));
   },
 
   async loadThread(rootId) {
@@ -296,6 +306,10 @@ function apply(e: EventRecord) {
     if (d.message && e.type === 'message.created') {
       const m = d.message as Message;
       const list = s.messages[m.channelId];
+      // An agent at work in one conversation posting in another: the one it works in notes it.
+      const from = m.runId ? (s.runs[m.runId] ?? s.runSummaries[m.runId])?.channelId : null;
+      const sent = from && from !== m.channelId ? s.sent[from] : undefined;
+      if (from && sent && !sent.some((x) => x.id === m.id)) next.sent = { ...s.sent, [from]: [...sent, m] };
       if (m.threadId) {
         const replies = s.threads[m.threadId];
         if (replies && !replies.some((x) => x.id === m.id)) next.threads = { ...s.threads, [m.threadId]: [...replies, m] };
@@ -372,7 +386,8 @@ export function memberName(id: string | null | undefined): string {
 export function channelTitle(channel: Channel, meId: string | undefined): string {
   if (channel.kind === 'channel') return `#${channel.name}`;
   const others = channel.memberIds.filter((m) => m !== meId);
-  return others.map((m) => memberName(m)).join(', ') || 'Notes to self';
+  // A DM without me is between two others, e.g. agents working something out.
+  return others.map((m) => memberName(m)).join(meId && channel.memberIds.includes(meId) ? ', ' : ' ⇄ ') || 'Notes to self';
 }
 
 /** The active run for an agent, if any. */

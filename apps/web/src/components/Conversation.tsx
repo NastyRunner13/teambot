@@ -2,8 +2,10 @@
 // right now, the approvals waiting for you here, and the composer.
 import { Copy, MessageSquareReply } from 'lucide-react';
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { Link } from 'wouter';
 import type { Message, RunSummary } from '@teambot/shared';
 import { api } from '../api';
+import { plainLine } from '../lib/conversations';
 import { ago, dayLabel, timeShort } from '../lib/format';
 import { useMember, useStore } from '../store';
 import { ApprovalCard } from './ApprovalCard';
@@ -108,21 +110,92 @@ function useWorkNotes(messages: Message[]): Map<string, RunSummary> {
       if (!m.runId || seen.has(m.runId)) continue;
       seen.add(m.runId);
       const run = summaries[m.runId];
-      if (run && !active[run.id] && run.toolCalls > 0) notes.set(m.id, run);
+      // A message an agent sent elsewhere gets no note there: the work belongs to the conversation it was done for.
+      if (run && run.channelId === m.channelId && !active[run.id] && run.toolCalls > 0) notes.set(m.id, run);
     }
     return notes;
   }, [messages, summaries, active]);
 }
 
-/** Messages with day dividers. `partnerId`: the other member of a DM, whose name needn't be repeated. */
-export function MessageList({ messages, partnerId, onReply }: { messages: Message[]; partnerId?: string; onReply?: (m: Message) => void }) {
+/** "Messaged Job Scout": an agent at work here posted in another conversation. Opens that conversation. */
+function SentNote({ m, partnerId }: { m: Message; partnerId?: string }) {
+  const channel = useStore((s) => s.channels.find((c) => c.id === m.channelId));
+  const me = useStore((s) => s.me);
+  const author = useMember(m.authorId);
+  const to = useMember(channel?.kind === 'dm' ? channel.memberIds.find((id) => id !== m.authorId) : undefined);
+  if (!channel || (channel.kind === 'dm' && !to)) return null;
+  // In a chat with one agent it's that agent who did it; anywhere else, say who.
+  const who = m.authorId === partnerId ? null : author;
+  const verb = channel.kind === 'dm' ? 'messaged' : 'posted in';
+  return (
+    <Link href={`/c/${channel.id}`} className="sent-note" title={plainLine(m.text)}>
+      {who && (
+        <>
+          <Avatar member={who} size={16} />
+          <strong>{who.name}</strong>
+        </>
+      )}
+      <span>{who ? verb : verb[0].toUpperCase() + verb.slice(1)}</span>
+      {channel.kind === 'channel' ? (
+        <strong>#{channel.name}</strong>
+      ) : to!.id === me?.id ? (
+        <strong>you</strong>
+      ) : (
+        <>
+          <Avatar member={to} size={16} />
+          <strong>{to!.name}</strong>
+          {to!.kind === 'agent' && to!.paused && <span title="It answers once you resume it">· paused</span>}
+        </>
+      )}
+    </Link>
+  );
+}
+
+type Entry = { kind: 'message' | 'sent'; m: Message };
+
+/** Messages with what was sent elsewhere in between, in time order: one note for several posts in a row to one place. */
+function timeline(messages: Message[], sent: Message[]): Entry[] {
+  // Older notes would pile up above the first loaded message.
+  const since = messages[0]?.createdAt ?? '';
+  const notes = sent.filter((m) => m.createdAt >= since && !isSystem(m.text));
+  const out: Entry[] = [];
+  const add = (m: Message) => {
+    const prev = out.at(-1);
+    if (prev?.kind !== 'sent' || prev.m.channelId !== m.channelId || prev.m.authorId !== m.authorId) out.push({ kind: 'sent', m });
+  };
+  let j = 0;
+  for (const m of messages) {
+    while (j < notes.length && notes[j].createdAt < m.createdAt) add(notes[j++]);
+    out.push({ kind: 'message', m });
+  }
+  while (j < notes.length) add(notes[j++]);
+  return out;
+}
+
+/**
+ * Messages with day dividers. `partnerId`: the other member of a DM, whose name needn't be repeated. `sent`: what
+ * agents at work here posted elsewhere, shown as notes between the messages.
+ */
+export function MessageList({ messages, sent = EMPTY, partnerId, onReply }: { messages: Message[]; sent?: Message[]; partnerId?: string; onReply?: (m: Message) => void }) {
   const me = useStore((s) => s.me);
   const notes = useWorkNotes(messages);
+  const entries = useMemo(() => timeline(messages, sent), [messages, sent]);
   return (
     <>
-      {messages.map((m, i) => {
-        const prev = messages[i - 1];
-        const newDay = !prev || new Date(prev.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
+      {entries.map((entry, i) => {
+        const m = entry.m;
+        const before = entries[i - 1];
+        const newDay = !before || new Date(before.m.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
+        const divider = newDay && <div className="day-divider">{dayLabel(m.createdAt)}</div>;
+        if (entry.kind === 'sent') {
+          return (
+            <Fragment key={`sent-${m.id}`}>
+              {divider}
+              <SentNote m={m} partnerId={partnerId} />
+            </Fragment>
+          );
+        }
+        const prev = before?.kind === 'message' ? before.m : undefined;
         const close =
           !newDay &&
           !!prev &&
@@ -134,7 +207,7 @@ export function MessageList({ messages, partnerId, onReply }: { messages: Messag
         const note = notes.get(m.id);
         return (
           <Fragment key={m.id}>
-            {newDay && <div className="day-divider">{dayLabel(m.createdAt)}</div>}
+            {divider}
             <MessageRow
               m={m}
               mine={mine}
@@ -182,14 +255,18 @@ export function Conversation({
   placeholder,
   empty,
   partnerId,
+  readOnly,
 }: {
   channelId: string;
   placeholder: string;
   empty?: React.ReactNode;
   /** The agent or person this DM is with. */
   partnerId?: string;
+  /** Shown instead of the composer in a conversation you only watch. */
+  readOnly?: React.ReactNode;
 }) {
   const messages = useStore((s) => s.messages[channelId] ?? EMPTY);
+  const sent = useStore((s) => s.sent[channelId] ?? EMPTY);
   const loaded = useStore((s) => channelId in s.messages);
   const loadMessages = useStore((s) => s.loadMessages);
   const approvals = useStore((s) => s.approvals);
@@ -220,16 +297,16 @@ export function Conversation({
       <div className="messages" ref={scroller} onScroll={onScroll}>
         <div className="messages-inner" ref={content}>
           {loaded && messages.length === 0 && !live.length && empty}
-          <MessageList messages={messages} partnerId={partnerId} onReply={(m) => openThread(m.id)} />
+          <MessageList messages={messages} sent={sent} partnerId={partnerId} onReply={(m) => openThread(m.id)} />
           {live.map((r) => (
-            <LiveWork key={r.id} run={r} showName={!partnerId} onOpenThread={r.threadId ? () => openThread(r.threadId!) : undefined} />
+            <LiveWork key={r.id} run={r} showName={r.agentId !== partnerId} onOpenThread={r.threadId ? () => openThread(r.threadId!) : undefined} />
           ))}
           {here.map((a) => (
             <ApprovalCard key={a.id} approval={a} />
           ))}
         </div>
       </div>
-      <Composer key={channelId} placeholder={placeholder} onSend={send} />
+      {readOnly ? <div className="composer read-only">{readOnly}</div> : <Composer key={channelId} placeholder={placeholder} onSend={send} />}
     </>
   );
 }

@@ -556,6 +556,11 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   server.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>('/api/channels/:id/messages', async (req) =>
     store.listTopLevel(channelFor(req, req.params.id).id, { before: req.query.before, limit: Math.min(Number(req.query.limit ?? 60), 200) }),
   );
+  server.get<{ Params: { id: string }; Querystring: { limit?: string } }>('/api/channels/:id/sent', async (req) =>
+    store
+      .listSentElsewhere(channelFor(req, req.params.id).id, { limit: Math.min(Number(req.query.limit ?? 60), 200) })
+      .filter((m) => channelVisible(m.channelId, me(req).id)),
+  );
   server.post<{ Params: { id: string } }>('/api/channels/:id/messages', async (req) => {
     const input = parse(
       z.object({ text: z.string().default(''), threadId: z.string().nullable().optional(), attachments: z.array(z.string()).max(20).optional() }),

@@ -51,6 +51,8 @@ export class Workspace {
 
   /** In team mode, direct messages that include a person are private to their members. Everything else is shared. */
   canSee(channel: Channel, viewerId: string): boolean {
+    // A helper works in its parent's conversations without joining them, so it sees what its parent sees.
+    viewerId = this.store.getAgent(viewerId)?.parentId ?? viewerId;
     if (!this.app.auth.teamMode || channel.kind !== 'dm' || channel.memberIds.includes(viewerId)) return true;
     return !channel.memberIds.some((id) => this.isHuman(id));
   }
@@ -149,7 +151,9 @@ export class Workspace {
     }
 
     const fromHuman = this.isHuman(input.authorId);
-    if (!channel.memberIds.includes(input.authorId)) this.addMember(channel.id, input.authorId, input.authorId);
+    // Posting joins a group chat. A DM stays between its two members: an agent working there for them (a helper, a
+    // task's assignee) speaks in it without joining, or the DM would stop being theirs.
+    if (channel.kind === 'channel' && !channel.memberIds.includes(input.authorId)) this.addMember(channel.id, input.authorId, input.authorId);
     const actor = input.actor ?? humanActor(input.authorId);
     const depth = fromHuman ? 0 : actor.depth + 1;
     const mentionIds = parseMentions(text)
@@ -184,7 +188,13 @@ export class Workspace {
 
   private route(message: Message, channel: Channel, initiator: Initiator, readOnly: boolean) {
     const targets = new Set(message.mentions.filter((id) => this.store.getAgent(id)));
-    if (channel.kind === 'dm') for (const id of channel.memberIds) if (this.store.getAgent(id)) targets.add(id);
+    if (channel.kind === 'dm') {
+      // A chat with an agent is that agent's to answer: naming a teammate there asks it to bring them in, it doesn't
+      // wake them in someone else's DM. Only people talking to each other call an agent into their DM by name.
+      const agents = channel.memberIds.filter((id) => this.store.getAgent(id));
+      if (agents.length) targets.clear();
+      for (const id of agents) targets.add(id);
+    }
     // A human replying in a thread continues the conversation with the agents already in it.
     if (message.threadId && channel.kind === 'channel' && this.isHuman(message.authorId)) {
       const root = this.store.getMessage(message.threadId);

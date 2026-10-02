@@ -167,6 +167,14 @@ export function workspaceTools(): ToolDef[] {
       summarize: (a) => `Update task #${a.task}`,
       async execute(a, ctx) {
         const ws = ctx.app.workspace;
+        const current = ctx.app.store.getTaskByNumber(a.task);
+        // Taking over or closing someone else's task (or an unowned one) needs a person to have asked for it directly.
+        const mine = current && (current.assigneeId === ctx.agent.id || current.creatorId === ctx.agent.id);
+        if (current && !mine && (a.status !== undefined || a.assignee !== undefined) && ctx.run.depth > 0) {
+          throw new Error(
+            `Task #${current.number} is ${current.assigneeId ? `${ws.memberName(current.assigneeId)}'s` : 'assigned to nobody'} and you didn't create it, so you can't change its status or owner. You can add a note. If it should be yours, a person has to ask you directly or assign it to you.`,
+          );
+        }
         const task = ws.updateTask(a.task, { status: a.status, assigneeId: resolveMemberId(ctx, a.assignee), note: a.note }, actorOf(ctx));
         return `Updated: ${ws.taskLine(task)}`;
       },
