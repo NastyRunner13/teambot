@@ -82,6 +82,9 @@ export class FakeComputers implements ComputerProvider {
           const el = body.ref === undefined ? self.elements[1] : self.elements[Number(body.ref)];
           return { url: self.url, element: el ? { ...el, role: 'button' } : null } as T;
         }
+        if (p === '/browser/screenshot') {
+          return { image: Buffer.from('page screenshot').toString('base64'), mime: 'image/jpeg', url: self.url, title: 'Mail', width: 1280, height: 720, scrollY: 0, scrollHeight: 2400 } as T;
+        }
         if (p.startsWith('/browser/')) return { url: self.url, title: 'Mail', snapshot: `snapshot after ${p}` } as T;
         if (p === '/desktop/describe') {
           // A point maps to the element numbered by its x coordinate (x=3 → "Send"); no point means the focused element.

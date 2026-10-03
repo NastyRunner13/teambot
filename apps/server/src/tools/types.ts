@@ -36,12 +36,14 @@ export interface ToolDef<A = any> {
   untrusted?: boolean;
   /**
    * Usable in a read-only run (a monitoring routine). Defaults to true for risk "read" and false otherwise, so a
-   * team tool that changes something (memory, tasks, helpers) must not set it. Messages are the intended exception:
+   * team tool that changes something (memory, agents) must not set it. Messages are the intended exception:
    * a read-only run reports, and whatever it hands on to other agents stays read-only.
    */
   readOnlyOk?: boolean;
   /** Offered only to some agents (e.g. desktop control is opt-in, coding agents need an API key). */
   available?(agent: Agent, app: App): boolean;
+  /** Its point is the image it returns, so it is not offered to models known to be text-only. */
+  returnsImages?: boolean;
   facts?(args: A, ctx: ToolContext): Promise<PolicyFacts>;
   /** One line for approvals and the activity log. */
   summarize?(args: A, facts: PolicyFacts): string;

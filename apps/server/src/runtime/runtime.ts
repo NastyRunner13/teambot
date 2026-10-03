@@ -12,7 +12,7 @@ import { BudgetExceeded, startOfDay } from './budget.js';
 import { maybeCompact } from './compaction.js';
 import { buildSystemPrompt, formatInbox } from './prompt.js';
 import { reviewAction } from './reviewer.js';
-import { saveImages, toModelMessages } from './vision.js';
+import { saveImages, seesImages, toModelMessages } from './vision.js';
 
 type StopReason = 'pause' | 'cancel' | 'shutdown';
 type WaitStatus = 'waiting_approval' | 'waiting_human';
@@ -357,7 +357,8 @@ Don't run it again just to see the result; check the current state instead.`
         transcript = compacted;
         store.setTranscript(runId, transcript);
       }
-      const tools = this.app.tools.forAgent(agent).filter((t) => !run.readOnly || usableReadOnly(t));
+      const vision = await seesImages(this.app, agent.model);
+      const tools = this.app.tools.forAgent(agent).filter((t) => (!run.readOnly || usableReadOnly(t)) && (vision || !t.returnsImages));
       const res = await this.app.models.chat({
         model: agent.model,
         messages: [{ role: 'system', content: buildSystemPrompt(this.app, agent, run) }, ...toModelMessages(this.app, transcript)],

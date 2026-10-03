@@ -93,6 +93,39 @@ describe('desktop control', () => {
   });
 });
 
+describe('browser screenshots', () => {
+  it('shows the model the visible page as an image', async () => {
+    const { app, models, owner } = setup();
+    const reader = addAgent(app, 'Reader');
+    models.script('test/reader', [callTool('browser_screenshot', {}), say('The chart says 74.2%.')]);
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Reader read the chart' });
+    await app.runtime.idle();
+
+    const [checked] = app.store.listEvents({ agentId: reader.id, types: ['tool.checked'] });
+    expect(checked.data.summary).toBe('Take a screenshot of the page on mail.example.com');
+    const run = app.store.listRuns({ agentId: reader.id })[0];
+    const result = app.store.getTranscript<TranscriptMessage>(run.id).find((m) => m.role === 'tool') as { content: string; images?: string[] };
+    expect(result.content).toContain('Screenshot of Mail (https://mail.example.com/compose), 1280x720, scrolled to 0px of 2400px');
+    expect(fs.readFileSync(path.join(app.cfg.dataDir, result.images![0]), 'utf8')).toBe('page screenshot');
+    expect(images(models.requests[1].messages)).toHaveLength(1);
+  });
+
+  it('is not offered to models known to be text-only', async () => {
+    const { app, models, owner } = setup();
+    for (const name of ['Text', 'Vision', 'Unlisted']) addAgent(app, name);
+    const model = (id: string, inputModalities: string[]) => ({ id, name: id, contextLength: 1000, promptPricePerM: 0, completionPricePerM: 0, inputModalities });
+    models.listModels = async () => [model('test/text', ['text']), model('test/vision', ['text', 'image'])];
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Text @Vision @Unlisted hi' });
+    await app.runtime.idle();
+
+    const toolsOf = (id: string) => models.requests.find((r) => r.model === id)!.tools!.map((t) => t.function.name);
+    expect(toolsOf('test/text')).not.toContain('browser_screenshot');
+    expect(toolsOf('test/text')).toContain('browser_snapshot');
+    expect(toolsOf('test/vision')).toContain('browser_screenshot');
+    expect(toolsOf('test/unlisted')).toContain('browser_screenshot');
+  });
+});
+
 describe('coding agents', () => {
   it('is offered once a key is stored, runs the CLI with the key in its environment, and keeps the key out of the log', async () => {
     const { app, models, owner, computers } = setup();
