@@ -26,6 +26,9 @@ interface ActiveRun {
 }
 
 const MAX_TOOL_OUTPUT = 16_000;
+/** Sent when a model ends its turn with no text (some do, with only reasoning), so the person still gets an answer. */
+export const EMPTY_REPLY_NUDGE =
+  '[system] Your last turn ended without any text, so nothing was posted. Write your reply now. If there is really nothing to say, reply with exactly [silent].';
 
 export function pendingToolCalls(t: TranscriptMessage[]): ToolCall[] {
   for (let i = t.length - 1; i >= 0; i--) {
@@ -360,6 +363,10 @@ Don't run it again just to see the result; check the current state instead.`
       const msg = res.message;
       uniquifyIds(transcript, msg);
       transcript.push(msg);
+      // A turn with no text and no tool calls would end the run with nothing posted: ask once more for the reply.
+      const empty = !msg.tool_calls?.length && !msg.content?.trim();
+      const askAgain = empty && transcript.at(-2)?.content !== EMPTY_REPLY_NUDGE;
+      if (askAgain) transcript.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
       store.setTranscript(runId, transcript);
       run = store.updateRun(runId, {
         steps: run.steps + 1,
@@ -380,6 +387,7 @@ Don't run it again just to see the result; check the current state instead.`
       if (!msg.tool_calls?.length) {
         const text = (msg.content ?? '').trim();
         if (text && !/^\[silent\]$/i.test(text)) this.say(run, text);
+        else if (empty && !askAgain) this.say(run, "I finished without writing a reply (the model returned an empty answer twice). Ask me again, or tell me to continue.", false);
       }
     }
   }
