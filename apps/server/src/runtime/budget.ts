@@ -16,14 +16,8 @@ export class BudgetExceeded extends Error {}
 export class Budgets {
   constructor(private app: App) {}
 
-  spend(since: string, agentId?: string | string[]): Spend {
+  spend(since: string, agentId?: string): Spend {
     return this.app.store.spendSince(COST_EVENTS, since, agentId);
-  }
-
-  /** An agent and its helpers spend from the same budget: the parent's. Helpers that are gone still count. */
-  private family(agent: Agent): { owner: Agent; ids: string[] } {
-    const owner = (agent.parentId && this.app.store.getAgent(agent.parentId)) || agent;
-    return { owner, ids: [owner.id, ...this.app.store.helperIdsEver(owner.id)] };
   }
 
   get workspaceDailyUsd(): number | null {
@@ -43,19 +37,16 @@ export class Budgets {
       const all = this.spend(startOfDay());
       if (all.usd >= workspace) return `the workspace's daily budget (${usd(all.usd)} of ${usd(workspace)} spent today)`;
     }
-    // Helpers spend from their parent's budget, and a parent's spend includes its helpers'.
-    const { owner, ids } = this.family(agent);
-    const { dailyUsd, monthlyUsd, dailyTokens } = owner.budget;
+    const { dailyUsd, monthlyUsd, dailyTokens } = agent.budget;
     if (dailyUsd === null && monthlyUsd === null && dailyTokens === null) return null;
-    const label = (kind: string) => (owner.id !== agent.id ? `${owner.name}'s ${kind}` : ids.length > 1 ? `the ${kind} I share with my helpers` : `my ${kind}`);
-    const today = this.spend(startOfDay(), ids);
-    if (dailyUsd !== null && today.usd >= dailyUsd) return `${label('daily budget')} (${usd(today.usd)} of ${usd(dailyUsd)} spent today)`;
+    const today = this.spend(startOfDay(), agent.id);
+    if (dailyUsd !== null && today.usd >= dailyUsd) return `my daily budget (${usd(today.usd)} of ${usd(dailyUsd)} spent today)`;
     if (dailyTokens !== null && today.tokens >= dailyTokens) {
-      return `${label('daily token budget')} (${today.tokens.toLocaleString('en-US')} of ${dailyTokens.toLocaleString('en-US')} tokens today)`;
+      return `my daily token budget (${today.tokens.toLocaleString('en-US')} of ${dailyTokens.toLocaleString('en-US')} tokens today)`;
     }
     if (monthlyUsd !== null) {
-      const month = this.spend(startOfMonth(), ids);
-      if (month.usd >= monthlyUsd) return `${label('monthly budget')} (${usd(month.usd)} of ${usd(monthlyUsd)} spent this month)`;
+      const month = this.spend(startOfMonth(), agent.id);
+      if (month.usd >= monthlyUsd) return `my monthly budget (${usd(month.usd)} of ${usd(monthlyUsd)} spent this month)`;
     }
     return null;
   }

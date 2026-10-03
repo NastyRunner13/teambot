@@ -155,7 +155,6 @@ function AgentProfile({ agentId, backTo }: { agentId: string; backTo?: string })
             label="role"
             onSave={(role) => api.patch(`/agents/${agent.id}`, { role }).catch((err) => (notify((err as Error).message, 'error'), Promise.reject(err)))}
           />
-          {agent.parentId && <span className="small muted">A short-lived helper; it leaves once it reports back.</span>}
           <ProfileTabs tabs={[['details', 'Details'], ['library', 'Library'], ['computer', 'Computer']]} />
         </div>
         {current === 'details' && <AgentDetails agent={agent} />}
@@ -168,7 +167,6 @@ function AgentProfile({ agentId, backTo }: { agentId: string; backTo?: string })
 
 function AgentDetails({ agent }: { agent: Agent }) {
   const live = useStore((s) => activeRunFor(s.runs, agent.id));
-  const helpers = useStore(useShallow((s) => s.agents.filter((a) => a.parentId === agent.id)));
   const showPanel = useStore((s) => s.showPanel);
   const openRun = useStore((s) => s.openRun);
   const notify = useStore((s) => s.notify);
@@ -196,7 +194,7 @@ function AgentDetails({ agent }: { agent: Agent }) {
           {agent.paused ? <Play size={12} /> : <Pause size={12} />} {agent.paused ? 'Resume' : 'Pause'}
         </button>
       </div>
-      {!agent.parentId && <RoutineList agent={agent} />}
+      <RoutineList agent={agent} />
       <section className="panel-section">
         <div className="panel-label">Make it yours</div>
         <button className="panel-row" onClick={() => showPanel({ view: { kind: 'customize', agentId: agent.id } })}>
@@ -216,21 +214,6 @@ function AgentDetails({ agent }: { agent: Agent }) {
           <ChevronRight size={16} className="faint" />
         </button>
       </section>
-      {helpers.length > 0 && (
-        <section className="panel-section">
-          <div className="panel-label">Helpers working for {agent.name}</div>
-          {helpers.map((h) => (
-            <button key={h.id} className="panel-row" onClick={() => showPanel({ agentId: h.id, tab: 'details' })}>
-              <Avatar member={h} size={26} status />
-              <span className="grow ellipsis">
-                {h.name}
-                <small>{h.role}</small>
-              </span>
-              <ChevronRight size={16} className="faint" />
-            </button>
-          ))}
-        </section>
-      )}
       <div className="panel-meta mono" title="Model">
         {agent.model}
       </div>
@@ -366,7 +349,7 @@ function ChannelDetails({ channel }: { channel: Channel }) {
   const notify = useStore((s) => s.notify);
   const [, navigate] = useLocation();
   const members = [...humans, ...agents].filter((m) => channel.memberIds.includes(m.id));
-  const outside = agents.filter((a) => !a.parentId && !channel.memberIds.includes(a.id));
+  const outside = agents.filter((a) => !channel.memberIds.includes(a.id));
   const group = channel.kind === 'channel';
 
   async function toggle(id: string, add: boolean) {
@@ -406,13 +389,11 @@ function ChannelDetails({ channel }: { channel: Channel }) {
               onChange={(e) => api.patch(`/channels/${channel.id}`, { leadAgentId: e.target.value || null }).catch((err) => notify((err as Error).message, 'error'))}
             >
               <option value="">Nobody — agents answer only when mentioned</option>
-              {agents
-                .filter((a) => !a.parentId)
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} answers messages that mention nobody
-                  </option>
-                ))}
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} answers messages that mention nobody
+                </option>
+              ))}
             </select>
             <span className="hint">The lead picks up questions asked to the whole chat and can hand them to the right teammate.</span>
           </div>

@@ -60,7 +60,7 @@ export function useConversations(): ConversationEntry[] {
       approvals.some((a) => (channel && a.channelId === channel.id) || (agent && a.agentId === agent.id && !a.channelId));
     const entries: ConversationEntry[] = [];
 
-    for (const agent of agents.filter((a) => !a.parentId)) {
+    for (const agent of agents) {
       const channel = dmWith(channels, me?.id, agent.id);
       const last = channel ? lastMessages[channel.id] : undefined;
       entries.push({

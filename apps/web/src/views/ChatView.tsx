@@ -7,7 +7,7 @@ import { api } from '../api';
 import { Avatar, Blob, GroupAvatar, shapeOf } from '../components/Avatar';
 import { Conversation } from '../components/Conversation';
 import { Panel } from '../components/panel/Panel';
-import { STARTER_TEAM, TEMPLATES } from '../lib/templates';
+import { STARTER_TEAM } from '../lib/templates';
 import { channelTitle, dmWith, useStore, type PanelTab } from '../store';
 import { NewAgentDialog } from './AgentForm';
 
@@ -171,13 +171,12 @@ export function Welcome() {
   const [, navigate] = useLocation();
   const [busy, setBusy] = useState(false);
   const [custom, setCustom] = useState(false);
-  const starters = TEMPLATES.filter((t) => STARTER_TEAM.includes(t.key));
 
   async function create() {
     setBusy(true);
     try {
       let lead: Agent | null = null;
-      for (const t of starters) {
+      for (const t of STARTER_TEAM) {
         const agent = await api.post<Agent>('/agents', { name: t.name, avatar: t.avatar, color: t.color, role: t.role, instructions: t.instructions, model: defaultModel });
         lead ??= agent;
       }
@@ -194,7 +193,7 @@ export function Welcome() {
     <div className="center-fill">
       <div className="hero">
         <div className="starter-roster">
-          {starters.map((t) => (
+          {STARTER_TEAM.map((t) => (
             <div key={t.key} className="starter-member">
               <Blob color={t.color} shape={shapeOf(t.avatar)} size={64} />
               <strong>{t.name}</strong>

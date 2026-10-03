@@ -7,6 +7,16 @@ interface Snapshot {
   title: string;
   snapshot: string;
 }
+interface PageShot {
+  image: string;
+  mime: string;
+  url: string;
+  title: string;
+  width: number;
+  height: number;
+  scrollY: number;
+  scrollHeight: number;
+}
 interface Described {
   url: string;
   element: { name: string; type: string; role: string } | null;
@@ -127,6 +137,29 @@ export function computerTools(): ToolDef[] {
       untrusted: true,
       schema: z.object({}),
       execute: (_a, ctx) => browserCall(ctx, '/browser/snapshot'),
+    }),
+
+    defineTool({
+      name: 'browser_screenshot',
+      description:
+        'See the visible part of the current page as an image. Use it when what you need is drawn rather than written: a chart, a table or text inside an image, a diagram, a layout. Scroll it into view first. To look at an image link or an image file up close, open it with browser_navigate (file:///path for files on your computer) and take a screenshot. Prefer this to installing OCR tools. PDFs open in the browser\'s viewer, where scrolling does not work: to see page N whole, open the PDF\'s URL with #page=N&view=Fit at the end and take a screenshot (if it is already open, open about:blank first, since changing only the # does not move the viewer).',
+      risk: 'read',
+      untrusted: true,
+      returnsImages: true,
+      schema: z.object({}),
+      facts: async (_a, ctx) => {
+        const f = await describe(ctx);
+        return { url: f.url, domain: f.domain };
+      },
+      summarize: (_a, f) => `Take a screenshot of the page${at(f)}`,
+      async execute(_a, ctx) {
+        const c = await ctx.computer();
+        const s = await c.call<PageShot>('/browser/screenshot', {}, { timeoutMs: 60_000, signal: ctx.signal });
+        return {
+          text: `Screenshot of ${s.title || '(untitled)'} (${s.url}), ${s.width}x${s.height}, scrolled to ${s.scrollY}px of ${s.scrollHeight}px. The image is attached.`,
+          images: [{ mime: s.mime, data: s.image }],
+        };
+      },
     }),
 
     defineTool({

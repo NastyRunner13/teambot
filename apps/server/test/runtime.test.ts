@@ -48,6 +48,48 @@ describe('agent runtime', () => {
     expect(app.store.getAgent(writer.id)!.status).toBe('idle');
   });
 
+  it('asks again when a model ends its turn without any text, so the answer still gets posted', async () => {
+    const { app, models, owner } = setup();
+    const writer = addAgent(app, 'Writer');
+    // Some models end a turn with only reasoning: no text and no tool calls.
+    models.script('test/writer', [{ role: 'assistant', content: null }, say('Here are the benchmarks.')]);
+    const dm = app.workspace.getOrCreateDm(owner.id, writer.id);
+    app.workspace.postMessage({ channelId: dm.id, authorId: owner.id, text: 'What are the benchmarks?' });
+    await app.runtime.idle();
+
+    expect(messagesIn(app, dm.id).map((m) => m.text)).toEqual(['What are the benchmarks?', 'Here are the benchmarks.']);
+    expect(models.requests[1].messages.at(-1)!.content).toContain('ended without any text');
+    expect(app.store.listRuns({ agentId: writer.id })[0].status).toBe('completed');
+
+    // Empty twice: the run ends with a note rather than in silence, and without asking a third time.
+    models.script('test/writer', [{ role: 'assistant', content: null }, say('  ')]);
+    app.workspace.postMessage({ channelId: dm.id, authorId: owner.id, text: 'And the prices?' });
+    await app.runtime.idle();
+    expect(messagesIn(app, dm.id).at(-1)!.text).toContain('I finished without writing a reply');
+    expect(models.requests).toHaveLength(4);
+  });
+
+  it('tells agents to say where answers came from and to report only what their tools showed', async () => {
+    const { app, models, owner } = setup();
+    const lead = addAgent(app, 'Lead');
+    addAgent(app, 'Analyst');
+    models.script('test/lead', [callTool('ask_agent', { to: 'Analyst', task: 'Check the price', expected_result: 'The price and its source' }), say('Asked Analyst.')]);
+
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, lead.id).id, authorId: owner.id, text: 'What does Acme cost?' });
+    await app.runtime.idle();
+
+    const promptOf = (model: string) => String(models.requests.find((r) => r.model === model)!.messages[0].content);
+    const prompt = promptOf('test/lead');
+    expect(prompt).toContain("When it rests on something you read with a tool (a page, a file, a message, a teammate's answer), name or link it.");
+    expect(prompt).toContain('figures, prices, dates, deadlines, limits');
+    expect(prompt).toContain("That is not a reason to go searching. If nothing you can reach covers the question, give your best answer and mark it unverified.");
+    expect(prompt).toContain("it is probably newer than your training. Look up what was asked directly; don't spend steps first proving that it exists.");
+    expect(prompt).toContain('Never say you sent, saved, created, changed, ran or checked something unless a tool result in this job shows it happened.');
+    // Where the final reply goes reads cleanly, whether the run works for a person or for another agent.
+    expect(prompt).toContain(`It is posted automatically to DM with ${owner.name}. If there is nothing useful to say`);
+    expect(promptOf('test/analyst')).toContain('It is posted automatically to DM with Lead. You are working for Lead here, so that reply is your answer to them: make it complete. If there');
+  });
+
   it('only wakes agents that are mentioned in a channel', async () => {
     const { app, models, owner } = setup();
     const lead = addAgent(app, 'Lead');

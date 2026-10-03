@@ -1,10 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildServer } from '../src/api.js';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import type { ChatRequest } from '../src/models/types.js';
-import { addAgent as addTeammate, removeAgent } from '../src/runtime/helpers.js';
-import { addAgent, general, legacyHelpers, messagesIn, testApp } from './helpers.js';
+import { addAgent as addTeammate, removeAgent } from '../src/runtime/agents.js';
+import { MIGRATIONS, Store } from '../src/store.js';
+import { addAgent, general, messagesIn, testApp } from './helpers.js';
 
 let current: App | null = null;
 afterEach(async () => {
@@ -18,9 +23,6 @@ function setup() {
   t.app.runtime.start();
   return t;
 }
-
-/** A helper's reply: its result, naming the job it was given. */
-const reportJob = (req: ChatRequest) => say(`Result for ${String(req.messages.at(-1)?.content).match(/Your job from Lead: (.+)/)?.[1]}`);
 
 const lastUserMessage = (req: ChatRequest) => String([...req.messages].reverse().find((m) => m.role === 'user')?.content ?? '');
 
@@ -60,14 +62,16 @@ describe('independent work and existing specialists', () => {
     const writer = addAgent(app, 'Writer');
     app.store.updateAgent(analyst.id, { role: 'Competitor pricing analysis' });
     models.script('test/lead', [
-      callTool('send_dm', { to: 'Analyst', text: 'Compare Acme and Globex annual pricing; report the cheaper option and its source.' }),
-      say('[silent]'),
-      callTool('post_message', { channel: '#general', text: 'The pricing specialist found Acme cheaper.' }),
-      say('[silent]'),
+      callTool('ask_agent', { to: 'Analyst', task: 'Compare Acme and Globex annual pricing', expected_result: 'The cheaper option and its source' }),
+      say('I asked Analyst to compare the pricing.'),
+      say('The pricing specialist found Acme cheaper.'),
     ]);
-    models.script('test/analyst', [say('Acme is cheaper annually; source: https://example.com/pricing')]);
+    // Analyst waits for a person first, so its answer comes after Lead's turn.
+    models.script('test/analyst', [callTool('ask_for_approval', { action: 'Open the pricing pages' }), say('Acme is cheaper annually; source: https://example.com/pricing')]);
 
     app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Lead compare annual pricing' });
+    await app.runtime.idle();
+    app.runtime.resolveApproval(app.store.listApprovals({ status: 'pending' })[0].id, 'approve', null, owner.id);
     await app.runtime.idle();
 
     const requests = models.requests.filter((r) => r.model === 'test/lead');
@@ -83,89 +87,6 @@ describe('independent work and existing specialists', () => {
     expect(messagesIn(app, general(app).id).at(-1)?.text).toBe('The pricing specialist found Acme cheaper.');
     expect(app.store.listEvents({ types: ['agent.created'] })).toEqual([]);
     expect(app.store.getChannel(app.workspace.getOrCreateDm(lead.id, analyst.id).id)!.memberIds.sort()).toEqual([lead.id, analyst.id].sort());
-  });
-});
-
-describe('legacy helpers', () => {
-  it('finish persisted jobs, report back to their parent together, and leave', async () => {
-    const { app, models, owner, computers } = setup();
-    const lead = addAgent(app, 'Lead');
-    models.script('test/lead', [say('Acme and Globex compared.')]);
-    models.script('test/helper', [reportJob, reportJob]);
-
-    const run = app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'Compare pricing' });
-    app.store.updateRun(run.id, { status: 'completed' });
-    legacyHelpers(app, lead, run, [
-      { title: 'Research Acme', job: 'Find Acme pricing' },
-      { title: 'Research Globex', job: 'Find Globex pricing' },
-    ], 'test/helper');
-    await app.runtime.idle();
-    await app.runtime.idle();
-
-    // The lead heard from both in one go, and only the lead spoke in the chat.
-    const heard = models.requests.filter((r) => r.model === 'test/lead').map(lastUserMessage);
-    expect(heard.some((m) => m.includes('Lead-h1 reports:\nResult for Research Acme') && m.includes('Lead-h2 reports:\nResult for Research Globex'))).toBe(true);
-    const chat = messagesIn(app, general(app).id);
-    expect(chat.filter((m) => m.authorId !== owner.id).every((m) => m.authorId === lead.id)).toBe(true);
-    expect(chat.at(-1)).toMatchObject({ authorId: lead.id, text: 'Acme and Globex compared.' });
-
-    // The helpers are gone, computers too.
-    expect(app.store.listAgents().map((a) => a.name)).toEqual(['Lead']);
-    expect(computers.resets.sort()).toEqual(app.store.listEvents({ types: ['agent.deleted'] }).map((e) => e.agentId).sort());
-    expect(app.store.listEvents({ types: ['agent.deleted'] }).every((e) => e.data.helper === true)).toBe(true);
-  });
-
-  it('that are stopped tell their parent so and leave', async () => {
-    const { app, models, owner } = setup();
-    const lead = addAgent(app, 'Lead');
-    models.script('test/lead', [say('Noted.')]);
-    models.script('test/helper', [callTool('ask_for_approval', { action: 'Email the client' })]);
-    const run = app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' });
-    app.store.updateRun(run.id, { status: 'completed' });
-    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, run, [{ title: 'Email', job: 'Email the client the quote' }], 'test/helper');
-    await app.runtime.idle();
-    const waiting = app.store.listRuns({ agentId: helper.id })[0];
-    expect(waiting.status).toBe('waiting_approval');
-
-    app.runtime.cancelRun(waiting.id, owner.id);
-    await vi.waitFor(() => expect(app.store.getAgent(helper.id)).toBeUndefined());
-    await app.runtime.idle();
-    expect(models.requests.filter((r) => r.model === 'test/lead').map(lastUserMessage)).toEqual([expect.stringContaining('Lead-h1 reports:\n(It was stopped before it finished.)')]);
-  });
-
-  it("go when their parent's run is stopped, with any results nobody will read", async () => {
-    const { app, owner } = setup();
-    const lead = addAgent(app, 'Lead');
-    app.runtime.setPausedAll(true, owner.id); // nobody works in this test
-    const run = app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' });
-    const [first] = legacyHelpers(app, app.store.getAgent(lead.id)!, run, [
-      { title: 'One', job: 'The first part of it' },
-      { title: 'Two', job: 'The second part of it' },
-    ]);
-    app.helpers.report(first, app.store.createRun({ agentId: first.id, channelId: general(app).id, initiator: 'human', depth: 1, title: 'One' }), 'Half done');
-
-    app.runtime.cancelRun(run.id, owner.id);
-    await vi.waitFor(() => expect(app.store.listAgents().map((a) => a.name)).toEqual(['Lead']));
-    expect(app.store.pendingInbox(lead.id)).toEqual([]);
-  });
-
-  it('share their parent’s budget and go when the parent goes', async () => {
-    const { app, owner } = setup();
-    const lead = addAgent(app, 'Lead');
-    app.store.updateAgent(lead.id, { budget: { dailyUsd: 0.0001, monthlyUsd: null, dailyTokens: null } });
-    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, app.store.createRun({ agentId: lead.id, channelId: general(app).id, initiator: 'human', depth: 0, title: 'x' }), [{ title: 'Sub-task', job: 'Do the sub-task please' }]);
-    app.runtime.setPausedAll(true, owner.id); // keep the helper from working in this test
-
-    app.bus.emit('llm.response', { agentId: helper.id }, { costUsd: 0.0001, inputTokens: 10, outputTokens: 10 });
-    expect(app.budgets.blocked(app.store.getAgent(lead.id)!)).toContain('the daily budget I share with my helpers');
-    expect(app.budgets.blocked(app.store.getAgent(helper.id)!)).toContain("Lead's daily budget");
-
-    expect(app.tools.forAgent(app.store.getAgent(helper.id)!).map((t) => t.name)).not.toContain('spawn_helpers');
-
-    const server = await buildServer(app);
-    await server.inject({ method: 'DELETE', url: `/api/agents/${lead.id}` });
-    expect(app.store.listAgents()).toHaveLength(0);
-    await server.close();
   });
 });
 
@@ -200,7 +121,6 @@ describe('create_agent', () => {
     expect(created).toMatchObject({
       role: 'Pricing analysis',
       model: 'test/model',
-      parentId: null,
       mcpServers: ['github'],
       skills: ['*'],
       desktop: false,
@@ -238,7 +158,7 @@ describe('create_agent', () => {
     expect(app.store.listAgents().map((a) => a.name)).toEqual(['Lead']);
   });
 
-  it('is capped per creator and not offered to helpers', async () => {
+  it('is capped per creator', async () => {
     const { app, models, owner } = setup();
     const lead = addAgent(app, 'Lead');
     for (let i = 1; i <= 5; i++) addTeammate(app, { name: `Made${i}`, role: '', instructions: '', model: 'test/model', mcpServers: [] }, lead.id, { createdBy: lead.id });
@@ -254,9 +174,58 @@ describe('create_agent', () => {
     app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Lead try again' });
     await app.runtime.idle();
     expect(app.store.listApprovals({ status: 'pending' })).toHaveLength(1);
+  });
+});
 
-    app.runtime.setPausedAll(true, owner.id);
-    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, app.store.listRuns({ agentId: lead.id })[0], [{ title: 'Sub-task', job: 'Do the sub-task please' }]);
-    expect(app.tools.forAgent(helper).map((t) => t.name)).not.toContain('create_agent');
+describe('removing helpers left from before (migration 16)', () => {
+  it('removes them as deleting an agent would, and keeps their history', () => {
+    const file = path.join(os.tmpdir(), `teambot-helpers-${crypto.randomBytes(4).toString('hex')}.db`);
+    const db = new DatabaseSync(file);
+    db.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    MIGRATIONS.slice(0, 15).forEach((sql) => db.exec(sql)); // through 15: the schema with helpers
+    db.exec(`INSERT INTO meta (key, value) VALUES ('schema_version', '15')`);
+
+    const at = '2026-10-02T10:00:00.000Z';
+    const agent = (id: string, name: string, parentId: string | null) =>
+      db.prepare(`INSERT INTO agents (id, name, role, instructions, model, avatar, color, status, created_at, updated_at, parent_id) VALUES (?, ?, '', '', 'm', 'a', 'c', 'idle', ?, ?, ?)`).run(id, name, at, at, parentId);
+    const run = (id: string, agentId: string, status: string) =>
+      db.prepare(`INSERT INTO runs (id, agent_id, status, channel_id, initiator, depth, title, created_at, updated_at) VALUES (?, ?, ?, 'chn_general', 'human', 0, 't', ?, ?)`).run(id, agentId, status, at, at);
+    const inbox = (id: string, agentId: string, kind: string, runId: string | null) =>
+      db.prepare(`INSERT INTO inbox (id, agent_id, kind, text, channel_id, initiator, created_at, run_id) VALUES (?, ?, ?, 'x', 'chn_general', 'agent', ?, ?)`).run(id, agentId, kind, at, runId);
+
+    db.prepare(`INSERT INTO channels (id, name, kind, created_at) VALUES ('chn_general', 'general', 'channel', ?)`).run(at);
+    agent('agt_lead', 'Lead', null);
+    agent('agt_helper', 'Lead-h1', 'agt_lead');
+    for (const id of ['agt_lead', 'agt_helper']) db.prepare(`INSERT INTO channel_members (channel_id, member_id) VALUES ('chn_general', ?)`).run(id);
+    db.prepare(`INSERT INTO helper_lineage (agent_id, parent_id) VALUES ('agt_helper', 'agt_lead')`).run();
+    run('run_done', 'agt_helper', 'completed');
+    run('run_waiting', 'agt_helper', 'waiting_approval');
+    db.prepare(`INSERT INTO approvals (id, agent_id, run_id, tool_call_id, kind, tool, args, summary, reason, status, created_at) VALUES ('apr_1', 'agt_helper', 'run_waiting', 'c1', 'approval', 'shell', '{}', 's', 'r', 'pending', ?)`).run(at);
+    inbox('inb_job', 'agt_helper', 'helper', null); // its unread job
+    inbox('inb_result', 'agt_lead', 'helper', null); // a result its parent never read
+    inbox('inb_read', 'agt_lead', 'helper', 'run_old'); // one it did read: history
+    inbox('inb_msg', 'agt_lead', 'message', null); // ordinary work: untouched
+    db.close();
+
+    const store = new Store(file);
+    try {
+      expect(store.listAgents().map((a) => a.id)).toEqual(['agt_lead']);
+      expect(store.getChannel('chn_general')!.memberIds).toEqual(['agt_lead']);
+      expect(store.pendingInbox('agt_lead').map((i) => i.id)).toEqual(['inb_msg']);
+      expect(store.getRun('run_done')!.status).toBe('completed');
+      expect(store.getRun('run_waiting')!.status).toBe('cancelled');
+      expect(store.getApproval('apr_1')!.status).toBe('cancelled');
+    } finally {
+      store.close();
+    }
+    const after = new DatabaseSync(file);
+    try {
+      expect(after.prepare('PRAGMA table_info(agents)').all().map((c) => c.name)).not.toContain('parent_id');
+      expect(after.prepare(`SELECT name FROM sqlite_master WHERE name = 'helper_lineage'`).all()).toEqual([]);
+      expect(after.prepare(`SELECT id FROM inbox WHERE kind = 'helper'`).all().map((r) => r.id)).toEqual(['inb_read']);
+    } finally {
+      after.close();
+      for (const f of [file, `${file}-wal`, `${file}-shm`]) fs.rmSync(f, { force: true });
+    }
   });
 });

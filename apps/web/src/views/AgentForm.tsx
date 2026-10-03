@@ -6,7 +6,7 @@ import { api } from '../api';
 import { Blob, SHAPE_EMOJI, shapeOf } from '../components/Avatar';
 import { Modal } from '../components/Modal';
 import { ModelPicker } from '../components/ModelPicker';
-import { TEMPLATES, type AgentTemplate } from '../lib/templates';
+import type { AgentTemplate } from '../lib/templates';
 import { useStore } from '../store';
 
 interface Draft {
@@ -125,6 +125,8 @@ export function AgentFields({ draft, set }: { draft: Draft; set: (d: Partial<Dra
   );
 }
 
+const BLANK: AgentTemplate = { key: 'blank', name: '', avatar: '✨', color: '#0ea5e9', role: '', instructions: '' };
+
 export function draftFrom(t: AgentTemplate | Agent, model: string): Draft {
   return {
     name: t.name,
@@ -140,11 +142,9 @@ export function draftFrom(t: AgentTemplate | Agent, model: string): Draft {
 
 export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const defaultModel = useStore((s) => s.health?.defaultModel ?? 'anthropic/claude-sonnet-5.5');
-  const agents = useStore((s) => s.agents);
   const notify = useStore((s) => s.notify);
   const [, navigate] = useLocation();
-  const [template, setTemplate] = useState(() => TEMPLATES.find((t) => !agents.some((a) => a.name === t.name)) ?? TEMPLATES[TEMPLATES.length - 1]);
-  const [draft, setDraft] = useState<Draft>(() => draftFrom(template, defaultModel));
+  const [draft, setDraft] = useState<Draft>(() => draftFrom(BLANK, defaultModel));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -180,24 +180,6 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
         </>
       }
     >
-      <p className="dialog-intro">Start with a role. Make the rest your own.</p>
-      <div className="templates">
-        {TEMPLATES.map((t) => (
-          <button
-            key={t.key}
-            className={`template ${template.key === t.key ? 'active' : ''}`}
-            aria-pressed={template.key === t.key}
-            onClick={() => {
-              setTemplate(t);
-              setDraft(draftFrom(t, draft.model || defaultModel));
-            }}
-          >
-            <Blob color={t.color} shape={shapeOf(t.avatar)} size={30} />
-            <div className="t-name">{t.name || 'Custom'}</div>
-            <div className="t-role">{t.role ? t.role.split(':')[0] : 'Start from scratch'}</div>
-          </button>
-        ))}
-      </div>
       <AgentFields draft={draft} set={(d) => setDraft((x) => ({ ...x, ...d }))} />
     </Modal>
   );

@@ -15,8 +15,8 @@ import type { ModelProvider } from './models/types.js';
 import { PolicyManager } from './policy.js';
 import { Budgets } from './runtime/budget.js';
 import { CronScheduler } from './runtime/cron.js';
+import { Handoffs } from './runtime/handoffs.js';
 import { ComputerLifecycle } from './runtime/lifecycle.js';
-import { Helpers } from './runtime/helpers.js';
 import { Triggers } from './runtime/triggers.js';
 import { Runtime } from './runtime/runtime.js';
 import { SkillStore } from './skills.js';
@@ -42,6 +42,7 @@ export interface App {
   tools: ToolRegistry;
   workspace: Workspace;
   runtime: Runtime;
+  handoffs: Handoffs;
   cron: CronScheduler;
   budgets: Budgets;
   skills: SkillStore;
@@ -53,7 +54,6 @@ export interface App {
   egress: EgressProxy;
   snapshots: Snapshots;
   triggers: Triggers;
-  helpers: Helpers;
 }
 
 export interface AppOverrides {
@@ -92,6 +92,7 @@ export function createApp(cfg: Config, overrides: AppOverrides = {}): App {
   app.workspace = new Workspace(app);
   app.budgets = new Budgets(app);
   app.runtime = new Runtime(app);
+  app.handoffs = new Handoffs(app);
   app.cron = new CronScheduler(app);
   app.lifecycle = new ComputerLifecycle(app);
   app.telegram = new TelegramBridge(app, overrides.telegram);
@@ -100,7 +101,6 @@ export function createApp(cfg: Config, overrides: AppOverrides = {}): App {
   app.egress = new EgressProxy(app);
   app.snapshots = new Snapshots(app);
   app.triggers = new Triggers(app, overrides.triggers);
-  app.helpers = new Helpers(app);
   app.auth = new Auth(app);
 
   seed(app);

@@ -10,6 +10,19 @@ import type { ChatMessage, ContentPart, TranscriptMessage } from '../models/type
 export const SCREENSHOTS_SHOWN = 2;
 const EXT: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
+/**
+ * Whether a model accepts images. A model missing from the list, or a list that can't be loaded, counts as yes:
+ * only models known to be text-only lose the tools whose point is an image.
+ */
+export async function seesImages(app: App, model: string): Promise<boolean> {
+  try {
+    const info = (await app.models.listModels()).find((m) => m.id === model);
+    return !info || info.inputModalities.includes('image');
+  } catch {
+    return true;
+  }
+}
+
 export function saveImages(app: App, runId: string, callId: string, images: { mime: string; data: string }[]): string[] {
   const dir = path.join(app.cfg.dataDir, 'screens', runId);
   fs.mkdirSync(dir, { recursive: true });

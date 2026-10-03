@@ -22,6 +22,18 @@ export interface Snapshot {
   snapshot: string;
 }
 
+/** The visible part of the page as a JPEG, for things drawn rather than written (charts, tables inside images). */
+export interface PageShot {
+  image: string;
+  mime: 'image/jpeg';
+  url: string;
+  title: string;
+  width: number;
+  height: number;
+  scrollY: number;
+  scrollHeight: number;
+}
+
 /** Runs inside the page. Tags interactive elements with data-tb-ref so tools can address them by number. */
 function collectPage(args: { maxElements: number; maxText: number }): PageData {
   document.querySelectorAll('[data-tb-ref]').forEach((e) => e.removeAttribute('data-tb-ref'));
@@ -195,6 +207,21 @@ export class BrowserController {
       data.elements.join('\n') || '(none)'
     }`;
     return { url: data.url, title: data.title, snapshot };
+  }
+
+  async screenshot(): Promise<PageShot> {
+    const page = await this.page();
+    // A tab in the background may never paint, so its capture would hang.
+    await page.bringToFront().catch(() => undefined);
+    const buf = await page.screenshot({ type: 'jpeg', quality: 80, scale: 'css', timeout: 20_000 });
+    const view = await page.evaluate(() => ({
+      title: document.title,
+      width: innerWidth,
+      height: innerHeight,
+      scrollY: Math.round(scrollY),
+      scrollHeight: document.documentElement.scrollHeight,
+    }));
+    return { image: buf.toString('base64'), mime: 'image/jpeg', url: page.url(), ...view };
   }
 
   async describe(ref?: number) {

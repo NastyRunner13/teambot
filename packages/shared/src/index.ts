@@ -80,8 +80,6 @@ export interface Agent {
   /** Full desktop control (screenshots, mouse and keyboard). Needs a model that can see images. */
   desktop: boolean;
   network: AgentNetwork;
-  /** Set for a short-lived helper: the agent that started it. Helpers share its budget and are removed once they report back. */
-  parentId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -146,8 +144,8 @@ export type RunStatus =
 
 export const ACTIVE_RUN_STATUSES: RunStatus[] = ['queued', 'running', 'waiting_approval', 'waiting_human', 'paused'];
 
-/** `helper`: a helper's job, or its result for the agent that started it. `task` only on items from the old task board. */
-export type InboxKind = 'message' | 'schedule' | 'system' | 'helper' | 'task';
+/** `task` only on items from the old task board. */
+export type InboxKind = 'message' | 'schedule' | 'system' | 'task';
 
 export interface InboxItem {
   id: string;
@@ -164,6 +162,39 @@ export interface InboxItem {
   readOnly: boolean;
   createdAt: string;
   runId: string | null;
+}
+
+export type HandoffStatus = 'open' | 'answered' | 'failed' | 'cancelled';
+
+/**
+ * One agent asking another for something (ask_agent). The request sits in the two agents' DM; the answer goes back
+ * to the conversation the asking run worked in.
+ */
+export interface Handoff {
+  id: string;
+  /** The run that asked. Its answers are delivered together once none is still open. */
+  runId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  /** The two agents' DM, where the request and the answer are posted. */
+  channelId: string;
+  /** Where the answer goes: the asking run's conversation. */
+  originChannelId: string | null;
+  originThreadId: string | null;
+  depth: number;
+  initiator: Initiator;
+  readOnly: boolean;
+  task: string;
+  status: HandoffStatus;
+  /** The answer, or why there is none. */
+  outcome: string | null;
+  /** The answer's depth, so what the asker does next still counts the hops. */
+  answerDepth: number | null;
+  delivered: boolean;
+  /** The asker was told once that the answer is held up (the asked agent ran out of budget). */
+  delayNoted: boolean;
+  createdAt: string;
+  settledAt: string | null;
 }
 
 /** Who ultimately caused a run: a human, another agent, a schedule, or an outside event (webhook). Policies can match on it. */

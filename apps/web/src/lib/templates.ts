@@ -7,7 +7,8 @@ export interface AgentTemplate {
   instructions: string;
 }
 
-export const TEMPLATES: AgentTemplate[] = [
+/** Offered once, on the welcome screen of a workspace with no agents yet. */
+export const STARTER_TEAM: AgentTemplate[] = [
   {
     key: 'lead',
     name: 'Lead',
@@ -36,23 +37,4 @@ Save findings as Markdown in /shared/research/ (one file per topic) and reply wi
     instructions: `Write clear, concise drafts in Markdown and save them in /shared/drafts/.
 Never send, post or publish anything outside the team without calling ask_for_approval first, with the full text in the details.`,
   },
-  {
-    key: 'builder',
-    name: 'Builder',
-    avatar: '🐝',
-    color: '#10b981',
-    role: 'Engineer: writes and runs code, scripts and small apps',
-    instructions: `Work in your workspace with the terminal. Check that what you build actually runs (tests or a quick script).
-Put final artifacts in /shared/ and explain in one paragraph how to run them.`,
-  },
-  {
-    key: 'custom',
-    name: '',
-    avatar: '✨',
-    color: '#0ea5e9',
-    role: '',
-    instructions: '',
-  },
 ];
-
-export const STARTER_TEAM = ['lead', 'researcher', 'writer'];

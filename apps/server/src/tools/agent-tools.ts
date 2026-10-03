@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import type { Agent } from '@teambot/shared';
 import type { App } from '../app.js';
-import { addAgent, nameTaken } from '../runtime/helpers.js';
+import { addAgent, nameTaken } from '../runtime/agents.js';
 import { NAME_RE } from '../util.js';
 import { defineTool, type ToolDef } from './types.js';
 
@@ -23,11 +23,11 @@ const CreateAgentArgs = z.object({
 });
 type CreateAgentArgs = z.infer<typeof CreateAgentArgs>;
 
-/** Agents this agent added (not helpers) that are still on the team. */
+/** Agents this agent added that are still on the team. */
 function addedBy(app: App, agent: Agent): Agent[] {
   return app.store
     .listEvents({ types: ['agent.created'], limit: 10_000 })
-    .filter((e) => e.actorId === agent.id && !e.data.parentId && e.agentId)
+    .filter((e) => e.actorId === agent.id && e.agentId)
     .map((e) => app.store.getAgent(e.agentId!))
     .filter((a): a is Agent => !!a);
 }
@@ -44,13 +44,12 @@ function refusal(app: App, agent: Agent, a: CreateAgentArgs): string | null {
   return null;
 }
 
-export function helperTools(): ToolDef[] {
+export function agentTools(): ToolDef[] {
   return [
     defineTool({
       name: 'create_agent',
       description: `Propose a new permanent teammate with its own role, instructions and computer, only for an ongoing specialty no existing teammate covers. Do one-off work yourself; do not create agents as temporary helpers or just to parallelize a task. A human usually approves it first. It gets your network rules and budget limits, and only skills and MCP servers you have. It joins #general (if the workspace still has one) and this channel; @mention it to give it work. You can have added at most ${MAX_CREATED_AGENTS} agents still on the team.`,
       risk: 'external',
-      available: (agent) => !agent.parentId,
       schema: CreateAgentArgs,
       // Not facts as such: a request that would fail is refused before a human is asked to approve it.
       async facts(a, ctx) {
@@ -81,7 +80,7 @@ export function helperTools(): ToolDef[] {
         const channel = run.channelId ? app.store.getChannel(run.channelId) : undefined;
         // Never into a DM: that would show a private conversation to a new member.
         if (channel?.kind === 'channel' && !channel.memberIds.includes(agent.id)) app.workspace.addMember(channel.id, agent.id, creator.id);
-        return `${agent.name} joined the team (${agent.role}, model ${agent.model}). When a task matches its specialty, use send_dm or @mention ${agent.name} to request its help.`;
+        return `${agent.name} joined the team (${agent.role}, model ${agent.model}). When a task matches its specialty, ask it with ask_agent.`;
       },
     }),
   ];

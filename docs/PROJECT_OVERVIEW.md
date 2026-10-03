@@ -105,7 +105,6 @@ flowchart TB
 | `auth` | Personal/team mode, passwords, sessions, invitations |
 | `egress` and `snapshots` | Restricted internet access and home-folder archives |
 | `telemetry` | Optional export of events and run traces |
-| `helpers` | Agent lifecycle functions and completion of legacy helper jobs |
 
 The server starts these services, listens for HTTP requests, and shuts them down together. Tests replace outside dependencies with fakes through `AppOverrides`.
 
@@ -183,7 +182,7 @@ type Initiator = 'human' | 'agent' | 'schedule' | 'event';
 interface InboxItem {
   id: string;
   agentId: string;             // recipient
-  kind: 'message' | 'schedule' | 'system' | 'helper' | 'task';
+  kind: 'message' | 'schedule' | 'system' | 'task';
   text: string;                // formatted input, not a pointer to a model session
   channelId: string | null;
   threadId: string | null;
@@ -280,7 +279,7 @@ New input for the **same channel, thread, and read-only state** can enter the ru
 
 `Runtime` has an in-memory `Map<runId, ActiveRun>`. An entry contains the agent ID, an `AbortController`, a completion promise, and an optional stop reason. It is added before asynchronous execution begins and removed in the launch cleanup. The map represents executing work in this process; the database represents durable work.
 
-`start()` recovers interrupted runs, starts the legacy-helper cleanup, installs a three-second polling timer, and immediately calls `poke()`. Message routing, human decisions, and run completion also poke the scheduler. A `dispatching`/`again` guard prevents recursive dispatch from re-entering the scheduler while it is already selecting work. This matters because routing and event handling can synchronously trigger more work.
+`start()` recovers interrupted runs, installs a three-second polling timer, and immediately calls `poke()`. Message routing, human decisions, and run completion also poke the scheduler. A `dispatching`/`again` guard prevents recursive dispatch from re-entering the scheduler while it is already selecting work. This matters because routing and event handling can synchronously trigger more work.
 
 The selection algorithm is approximately:
 
@@ -350,17 +349,21 @@ Human replies in a group-chat thread also wake agents who have participated in t
 
 ### Direct messages
 
-`send_dm` resolves an existing teammate, gets or creates the DM, saves the message, and routes it to the other agent. Sending to yourself is rejected.
+`send_dm` messages a person: it resolves the teammate, gets or creates the DM, saves the message and routes it. Sending to yourself is rejected, and so is sending to an agent: agents hand each other work with `ask_agent` (below).
 
 A person's DM with an agent belongs to that agent. If you mention Writer inside your DM with Lead, the mention does **not** directly wake Writer in your private DM. Lead can decide to send Writer its own focused request. In a DM between people, mentions can bring an agent into the conversation's work without changing the DM's members.
 
-### Collaboration is asynchronous
+### Asking a teammate agent: `ask_agent`
 
-`send_dm` returns a delivery receipt, not the specialist's completed answer. The recipient has its own inbox and run. Its reply in an agent-to-agent DM routes a message back to the requesting agent.
+`ask_agent` takes the teammate's name, the `task`, optional `context` and `constraints`, the `expected_result` (what a good answer looks like) and attachments. The request is posted in the two agents' DM as a structured message (Task, Context, Constraints, A good answer), where people can read it, and recorded as a **handoff** (`runtime/handoffs.ts`, table `handoffs`). The tool returns a receipt; the asked agent works in its own run.
 
-That reply is scoped to the **agent-to-agent DM**. It is not automatically injected into an unrelated run in the human's conversation. The requesting agent may need another run and an explicit message to relay the findings to the human or original channel. This implementation does not provide a synchronous “delegate and wait for all results” operation for current specialist communication.
+The asked agent is told that its final reply is its answer. That reply is still posted in the agents' DM, but instead of waking the asker there, it goes back to the **conversation the asking run worked in** (the person's chat, or the group chat and thread). All of one run's answers arrive together, in one inbox item, once none of them is still open; an answer that comes while the asking run is still working is folded into that run. If the asking run is itself working for another agent, it ends with `[silent]` after asking and answers its own asker once it hears back.
 
-Example: Lead asks Researcher to check a source, including the question, relevant context, expected output, and a shared file path. Researcher reads the request, checks it on its own computer, writes its findings, and replies. Lead can then read the file and communicate the result back. Each step remains independently governed and logged.
+A request that ends without an answer is said out loud, the same way: the asked agent's run failed, a person stopped it, it finished without replying (or hit the step limit), or the agent was removed. The asker is told who didn't answer and why, and to do that part itself or say plainly that it didn't come back. If the asked agent runs out of budget mid-answer, the asker is told once and the handoff stays open. If the asking run is stopped or fails, its open requests are cancelled and a late answer wakes nobody.
+
+`ask_agent` refuses: asking yourself or a person; asking an agent that is waiting on your answer (say it in your reply instead); a paused or over-budget agent; a job already passed between agents `TEAMBOT_MAX_AGENT_DEPTH` times; and a run that has already handed work to `TEAMBOT_MAX_HANDOFFS_PER_RUN` teammates (default 4), counting agents it @mentioned in group chats. `post_message` applies the same limit to new agent mentions and refuses a DM with another agent.
+
+Example: Lead asks Researcher to check a source, with the question, relevant context, constraints and the expected output. Researcher checks it on its own computer and replies. Lead gets the answer in the person's chat, where it was asked, and replies there. Each step remains independently governed and logged.
 
 ### Preventing endless conversations
 
@@ -368,7 +371,7 @@ Messages carry an agent-hop depth. Human messages start at depth zero. Agent mes
 
 Prompts also discourage unnecessary acknowledgements and repeated handoffs. The limit is a routing guard, not proof that every collaboration will reach a useful conclusion.
 
-The UI can show “Messaged …” inside the initiating conversation and link to the agents' conversation. That visual association comes from the outgoing message's `runId`; it does not make specialist results synchronous.
+The UI can show “Messaged …” inside the initiating conversation and link to the agents' conversation. That visual association comes from the outgoing message's `runId`. The answer's return trip comes from the handoff record, and the asking run's full log shows “… answered” or “No answer from …” when it settles.
 
 ### Routing algorithm and message provenance
 
@@ -399,7 +402,7 @@ The sending actor carries `{ id, depth, initiator, runId? }`. Human messages res
 
 For each selected agent, routing copies formatted message text into a new inbox row with channel/thread/depth/initiator/read-only metadata. When depth is **greater than** the configured limit it logs `loop.guard` and skips that delivery. With the default limit, depth six is accepted and seven is dropped. Explicit message tools propagate the source run's read-only state through this path.
 
-`Message.runId` identifies the **sending run**. The new recipient run gets its own ID later. This is useful for showing outgoing specialist messages in the sender's work log, but it is not a parent-child run relationship. There is no automatically assembled tree of delegated tasks or a typed return-value channel.
+`Message.runId` identifies the **sending run**. The new recipient run gets its own ID later. This is useful for showing outgoing specialist messages in the sender's work log, but it is not a parent-child run relationship. The link between a request and its answer is the `handoffs` row: the asking run, the agents' DM, the origin conversation and thread, and how it ended.
 
 ### A specialist exchange with concrete run boundaries
 
@@ -408,11 +411,11 @@ Consider a human DM with Lead (`dm-human-lead`) and a separate Lead–Researcher
 | Step | Persisted change | Execution consequence |
 |---|---|---|
 | 1. Human asks Lead | Input for Lead, depth 0, channel `dm-human-lead` | Scheduler creates `run-L1` |
-| 2. Lead calls `send_dm` to Researcher | Outgoing message with `runId=run-L1`, depth 1, in `dm-lead-researcher`; inbox input for Researcher | Tool returns a receipt; Lead's model can continue |
-| 3. Researcher starts | New `run-R1`, depth 1, channel `dm-lead-researcher` | Researcher's prompt, tools, model, and computer are used |
-| 4. Researcher answers automatically | Message with `runId=run-R1`, depth 2, in `dm-lead-researcher`; inbox input for Lead | Lead receives a new DM-scoped input |
-| 5. Lead handles the reply | Input does not match `run-L1`'s human DM | It waits until Lead can start another run, such as `run-L2` |
-| 6. Lead relays the findings | Lead explicitly sends a human DM or posts to the intended group | Human receives the useful result |
+| 2. Lead calls `ask_agent` for Researcher | Structured request with `runId=run-L1`, depth 1, in `dm-lead-researcher`; inbox input for Researcher; an open handoff from `run-L1` whose origin is `dm-human-lead` | Tool returns a receipt; Lead's model can continue, or end its turn with a one-line note |
+| 3. Researcher starts | New `run-R1`, depth 1, channel `dm-lead-researcher` | Researcher's prompt, tools, model and computer are used; it is told its final reply is its answer |
+| 4. Researcher answers automatically | Message with `runId=run-R1`, depth 2, in `dm-lead-researcher`; the handoff is settled as answered | Routing does not wake Lead in the agents' DM |
+| 5. The answer goes back | Once `run-L1` has no open handoffs, one inbox input for Lead in `dm-human-lead`, depth 2 | Folded into `run-L1` if it is still working, otherwise a new `run-L2` in the human's DM |
+| 6. Lead replies | Lead's automatic final reply | Posted in the human's DM, where the question was asked |
 
 The transcript for Lead's request contains this sort of tool exchange:
 
@@ -425,26 +428,26 @@ The transcript for Lead's request contains this sort of tool exchange:
       "id": "call-research",
       "type": "function",
       "function": {
-        "name": "send_dm",
-        "arguments": "{\"to\":\"Researcher\",\"text\":\"Verify the source. Save findings to /shared/source-check.md and reply with the result.\"}"
+        "name": "ask_agent",
+        "arguments": "{\"to\":\"Researcher\",\"task\":\"Verify the source\",\"context\":\"The draft is /shared/draft.md\",\"expected_result\":\"Whether the source supports the claim, with a link\"}"
       }
     }]
   },
   {
     "role": "tool",
     "tool_call_id": "call-research",
-    "content": "Sent to Researcher."
+    "content": "Asked Researcher. Their answer comes back to you in this conversation, together with any other answers you are waiting for. ..."
   }
 ]
 ```
 
-The receipt does not contain Researcher's answer. Lead and Researcher can progress concurrently subject to the global limit, but there is no `await specialist.result`, automatic join barrier, or guarantee that Lead's original run waits. If Lead is waiting for a human decision on `run-L1`, it cannot start `run-L2` until that saved active run is released.
+The receipt does not contain Researcher's answer; Lead and Researcher progress concurrently subject to the global limit. If Lead is waiting for a human decision on `run-L1` when the answer arrives, the answer waits in Lead's inbox until that run is released.
 
-The tools also matter for reply placement: `send_dm` accepts `to`, `text`, and optional attachments; `post_message` accepts `channel`, `text`, and optional attachments. `post_message` does not expose a `threadId` argument. Automatic final answers preserve their run's originating thread, while explicit channel posts are top-level messages. A specialist handoff should therefore include enough goal/context/output destination in its text for the recipient to act without access to the sender's transcript.
+`post_message` accepts `channel`, `text` and optional attachments and does not expose a `threadId` argument. Automatic final answers preserve their run's originating thread, while explicit channel posts are top-level messages. An `ask_agent` answer returns to the asking run's thread.
 
-Automatic agent answers in the agent DM themselves route back to the other agent. A sequence of acknowledgements can keep waking both agents until silence or the depth limit ends it. `[silent]` suppresses only the automatic final chat message; it does not retract messages already sent by tools.
+An agent's reply in an agent-to-agent DM that answers no open request still routes back to the other agent, as before. `[silent]` suppresses only the automatic final chat message; it does not retract messages already sent by tools.
 
-Shared files provide an output convention, not a locking protocol. If multiple specialists write the same file, TeamBot does not merge their contributions or enforce ownership. Distinct output paths and explicit request text are conventions the agents must follow. Legacy helpers have a different parent-report path; do not assume that path provides a join primitive for the current permanent-specialist tools.
+Shared files provide an output convention, not a locking protocol. If multiple specialists write the same file, TeamBot does not merge their contributions or enforce ownership. Distinct output paths and explicit request text are conventions the agents must follow.
 
 Sources: [workspace routing and visibility](../apps/server/src/workspace.ts), [message tools](../apps/server/src/tools/workspace-tools.ts), [run grouping](../apps/server/src/runtime/runtime.ts), [sent-elsewhere query](../apps/server/src/store.ts), [web state](../apps/web/src/store.ts).
 
@@ -469,13 +472,11 @@ The new agent:
 
 A creator can have at most five agents it created still on the team. Removing one frees a slot. This is a per-creator limit, not a global maximum number of agents. New permanent agents have their own budget accounting; inheriting the numeric caps does not create one shared spending pool with the creator.
 
-### Legacy helpers
+### No temporary helpers
 
-**New temporary helpers cannot be spawned in this checkout.** There is no registered `spawn_helpers` tool. `runtime/helpers.ts` still supports persisted helpers from earlier versions finishing, reporting to a parent, sharing its budget, and being removed. That retained code is compatibility behavior.
+TeamBot does not spawn temporary helper bots or sub-agents. There is no `spawn_helpers` tool, agents have no parent, and migration 16 removed any helpers left from earlier versions (their past runs and events stay as history). Do not explain TeamBot as spawning parallel temporary bots.
 
-The README still describes creating temporary helpers; the feature map's current progress notes now describe their removal. For this document's reviewed working tree, the registry, helper tools, system prompt, and updated helper tests are the authority. Do not explain TeamBot as currently spawning parallel temporary bots.
-
-Sources: [system prompt](../apps/server/src/runtime/prompt.ts), [agent creation](../apps/server/src/tools/helper-tools.ts), [legacy handling](../apps/server/src/runtime/helpers.ts), [helper and creation tests](../apps/server/test/helper-agents.test.ts).
+Sources: [system prompt](../apps/server/src/runtime/prompt.ts), [agent creation](../apps/server/src/tools/agent-tools.ts), [agents joining and leaving](../apps/server/src/runtime/agents.ts), [agent tests](../apps/server/test/create-agent.test.ts).
 
 ## 8. What a model sees and how context works
 
@@ -488,7 +489,7 @@ Before every model call, TeamBot rebuilds a system prompt containing:
 - Descriptions of the skills this agent may load.
 - Team memory and that agent's own memory.
 - Names of usable stored secrets, with placeholder instructions rather than values.
-- Relevant read-only, desktop, coding-agent, or legacy-helper instructions.
+- Relevant read-only, desktop, or coding-agent instructions.
 - The current time in UTC.
 
 The model also receives the current run's transcript and the available function schemas. It does not receive the entire database, all files, all skills' full instructions, or all previous conversations automatically.
@@ -552,6 +553,8 @@ usage.include = true
 `formatInbox()` turns several matching inbox deliveries into one `user` message with numbered entries. On the first input only, it adds recent conversation context. For a thread, that is the root plus up to eight replies before the first input's timestamp; otherwise it is up to nine preceding top-level messages. A text-suffix check attempts to avoid duplicating messages already represented by current input. This is a bounded textual context builder, not a general retrieval planner.
 
 The system prompt is **not stored in `run_transcripts`**. Each step reads current agent settings, the roster, selected skill summaries, secret names, and memory. Changes can therefore affect a run's next model call, but the transcript alone does not reproduce the exact historical prompt. The model call already in flight continues with its previously constructed request.
+
+Besides that context, the prompt carries working rules: how to talk to people and teammates, when to plan with a checklist, how to treat untrusted content, to say where an answer came from (naming what was read, and marking facts people act on as unverified when nothing reachable confirms them, without going hunting for a source), and to report only actions a tool result in the job shows happened. These are instructions to the model, not checks: the runtime does not compare a reply's claims against the tool results.
 
 Resuming a paused or approved run uses its saved transcript. A message arriving after a run has completed normally starts a new run, with bounded recent chat context and current memory rather than the previous run's complete transcript. Saying “continue” in chat is therefore different from resuming the persisted paused execution. Findings needed beyond one run should be placed in an appropriate artifact or communicated clearly in the conversation.
 
@@ -661,7 +664,7 @@ This is the built-in tool inventory in the reviewed source. “Risk” selects a
 
 | Tools | Purpose | Risk / availability |
 |---|---|---|
-| `post_message`, `send_dm` | Talk to teammates; hand on requests and shared attachments | Internal; allowed in read-only runs, with downstream read-only propagation |
+| `post_message`, `send_dm`, `ask_agent` | Talk to the team; hand a teammate agent work and get its answer back; share attachments | Internal; allowed in read-only runs, with downstream read-only propagation |
 | `read_channel` | Read accessible recent messages | Internal; read-only eligible |
 | `update_progress` | Save the run's full checklist | Internal; read-only eligible |
 | `ask_for_approval` | Explicitly pause for a human decision | Internal; forced approval flow |
@@ -669,7 +672,7 @@ This is the built-in tool inventory in the reviewed source. “Risk” selects a
 | `use_skill` | Load instructions and copy eligible supporting files | Internal; read-only eligible |
 | `remember`, `forget` | Add or remove lasting agent/team notes | Internal; excluded from read-only runs; team changes reviewed by default |
 | `search_history` | Find accessible past messages | Internal; read-only eligible |
-| `create_agent` | Propose a permanent specialist teammate | External; unavailable to legacy helpers; asks by default |
+| `create_agent` | Propose a permanent specialist teammate | External; asks by default |
 | `shell` | Run Bash on the agent computer | Write; default 120 seconds, declared maximum 900 |
 | `read_file`, `list_files` | Read text or list computer files | Read |
 | `write_file` | Create, overwrite, or append text | Write |
@@ -1151,7 +1154,7 @@ Agent computers are intended to be kept away from the TeamBot API by firewall ru
 
 ### Visibility checks at agent and API boundaries
 
-`canSee(channel, viewerId)` first maps a legacy helper to its parent. In personal mode it allows workspace conversation visibility. In team mode, group channels and agent-only DMs are shared; a human-containing DM requires membership. Channel membership in a group is used for participation and routing, not a private-channel access-control model.
+In personal mode, `canSee(channel, viewerId)` allows workspace conversation visibility. In team mode, group channels and agent-only DMs are shared; a human-containing DM requires membership. Channel membership in a group is used for participation and routing, not a private-channel access-control model.
 
 `canSeeFrom(targetChannel, agentId, workingIn)` adds an output-audience constraint for agent retrieval:
 
@@ -1287,7 +1290,7 @@ Sources: [store and transaction methods](../apps/server/src/store.ts), [event bu
 
 Per-agent budgets support daily dollars, monthly dollars, and daily tokens. A workspace-wide daily dollar cap applies across agents. `null` means no cap; caps/settings are saved in SQLite rather than solely environment configuration.
 
-Spend is summed from `llm.response`, `run.compacted`, and `tool.reviewed` events. This includes agent model work, summarization, and reviewer calls. Legacy helpers spend against the parent's budget, with retained lineage so deleted helpers' prior spend still counts.
+Spend is summed from `llm.response`, `run.compacted`, and `tool.reviewed` events. This includes agent model work, summarization, and reviewer calls.
 
 Checks occur before work/model calls. An exhausted agent's input waits, and an active run can return to queued with a budget-wait explanation. The scheduler rechecks as time moves forward or limits change.
 
@@ -1308,7 +1311,7 @@ Budget days/months reset in **UTC**. Midnight UTC is **05:30 in Asia/Kolkata**. 
 
 ### Run counters versus budget accounting
 
-`Run.costUsd`, `tokensIn`, and `tokensOut` are incremented by the main agent model responses in that run. They do not include every ancillary model call. Budget calculation instead sums usage from `llm.response`, `run.compacted`, and `tool.reviewed` events, selecting the agent and retained legacy-helper lineage as appropriate.
+`Run.costUsd`, `tokensIn`, and `tokensOut` are incremented by the main agent model responses in that run. They do not include every ancillary model call. Budget calculation instead sums usage from `llm.response`, `run.compacted`, and `tool.reviewed` events, for the workspace or one agent.
 
 Consequently, a run that requires reviews and compaction can have a main-agent counter lower than the total spend attributable to its execution. `steps` counts main-agent responses; one response with five calls still adds one step, and a reviewer response does not add another main-agent step. The provider's missing usage fields default to zero, so these metrics reflect recorded data rather than independent provider billing reconciliation.
 
@@ -1446,7 +1449,7 @@ The following map describes existing tests in this checkout; it is not a claim t
 | Human-agent DM mentions do not wake another agent there | [dms.test.ts](../apps/server/test/dms.test.ts) |
 | Human-only DMs can call an agent without changing membership | [dms.test.ts](../apps/server/test/dms.test.ts) |
 | Outgoing specialist messages retain their sending-run association | [dms.test.ts](../apps/server/test/dms.test.ts) |
-| Specialist creation and compatibility-only helper behavior | [helper-agents.test.ts](../apps/server/test/helper-agents.test.ts) |
+| Specialist creation, and removal of helpers left from earlier versions | [create-agent.test.ts](../apps/server/test/create-agent.test.ts) |
 
 Use a scripted provider to supply a known assistant tool call, inspect the resulting transcript/events/approval, and verify the fake computer received only expected execution. A restart test should seed both transcript and audit state at the intended crash boundary. Merely mocking a final answer misses the gateway and recovery contracts.
 
@@ -1492,13 +1495,12 @@ The feature map describes P0/P1 as complete and has later redesign notes. “Com
 | Team sign-in and private conversation retrieval | Shared computers/files/memory remain workspace resources |
 | Persistent runs, logs, budgets, telemetry | External side effects and CLI spending have limits |
 | Permanent agent proposals | Default human approval, bounded creator permissions/cap |
-| Legacy helper completion | No new helper spawning in the reviewed working tree |
 
 The documented roadmap still includes external A2A interoperability/Agent Cards, agent-owned identities/accounts, skill learning by demonstration, reviewed self-improving skills, marketplace/vetting, co-edited documents, richer generated UI, enterprise identity/roles, more computer backends, mobile, payments/wallets, voice, tamper-evident logs, and confidential computing.
 
 Do not present a research comparison or roadmap item as a current capability. In particular, ordinary internal agent messaging is not implementation of the external A2A protocol, and optional gVisor is not confidential computing. Some early “open decisions” in the feature map have already been settled in code: TypeScript, SQLite, Apache-2.0, and personal/small-team support.
 
-Sources: [feature map](FEATURE_MAP.md), [README](../README.md), [license](../LICENSE), [current helper tools](../apps/server/src/tools/helper-tools.ts).
+Sources: [feature map](FEATURE_MAP.md), [README](../README.md), [license](../LICENSE), [agent tools](../apps/server/src/tools/agent-tools.ts).
 
 ## 29. Questions you should be able to answer
 
@@ -1518,7 +1520,7 @@ Sources: [feature map](FEATURE_MAP.md), [README](../README.md), [license](../LIC
 
 **How does one agent ask another for help?** Through a focused DM or channel mention. The reply is asynchronous and belongs to that conversation. It is not a blocking function result in the original human run.
 
-**Can an agent create agents?** It can propose permanent specialty agents through `create_agent`, subject to validation, cap, and default approval. It cannot currently spawn new temporary helpers.
+**Can an agent create agents?** It can propose permanent specialty agents through `create_agent`, subject to validation, cap, and default approval. It cannot spawn temporary helpers.
 
 **Is memory a vector database?** No. Lasting memory is Markdown injected into prompts. Historical conversation search is SQL text matching.
 
@@ -1568,7 +1570,7 @@ Sources: [feature map](FEATURE_MAP.md), [README](../README.md), [license](../LIC
 
 **Can an incoming message change a tool batch already proposed?** Matching input is absorbed after pending calls are drained. A chat correction alone does not interrupt the batch; pause/cancel invokes the abort controls.
 
-**Is collaboration a task graph with return values?** Current permanent-agent collaboration is message routing. Each recipient gets a separate inbox/run/transcript. `send_dm` returns a receipt, and results stay in that DM until an agent explicitly relays them. There is no automatic join or original-request return handle.
+**Is collaboration a task graph with return values?** Not a graph, but requests do have return values. Each recipient gets a separate inbox/run/transcript. `ask_agent` returns a receipt and records a handoff; the answer, or the reason there is none, comes back to the conversation the asking run worked in, with all of that run's answers together. There is no shared plan or dependency tracking between handoffs.
 
 **Does a specialist inherit the requesting agent's model context?** No. It gets the supplied message, bounded context from its own run's conversation, its own instructions/memory, and its eligible tools. It does not inherit the sender's transcript or computer state.
 
@@ -1629,7 +1631,7 @@ For a new built-in capability, the implementation path is:
 4. Register the tool, expose the appropriate schema, and add policy behavior when its risk default is insufficient. A skill alone cannot accomplish these changes.
 5. Add regression coverage for the real contract: eligibility, policy outcome, approval resume, result shape, relevant cancellation/recovery behavior, and read-only propagation. Use fake outside services to make that behavior deterministic.
 
-For an orchestration feature, first decide whether it is a message convention or a new durable primitive. A true specialist join would need explicit correlation, parent/result state, original conversation/thread routing, wait/resume rules, budget attribution, and crash recovery. Those fields and semantics are not supplied merely by wrapping `send_dm` in a more elaborate prompt. The existing code should be described as asynchronous message coordination until such a primitive is implemented.
+For an orchestration feature, first decide whether it is a message convention or a new durable primitive. Handoffs (`runtime/handoffs.ts`) are the durable primitive for asking a teammate: correlation, result state, origin conversation and thread, a join per asking run, and failure reporting all live in the `handoffs` table, so they survive restarts. Spend stays on whichever agent did the work. Build on it rather than on message conventions in prompts.
 
 For shared knowledge, choose the appropriate lifetime: a run transcript for immediate work, a skill for a reusable procedure, memory for stable facts, a shared file for an artifact, and message history for past discussions. Adding an embedding store or automatic memory extractor would change the retrieval and privacy model; neither is part of the current implementation.
 
@@ -1664,4 +1666,4 @@ The expanded guide's local source links, contents/technical-reading anchors, cod
 
 During the initial guide creation, application checks were attempted against the existing installed dependencies. Computerd typechecking passed; server/web typechecking, server test collection, and the web build could not pass with missing installed packages including `@marcbachmann/cel-js`, IMAP/calendar packages, and `@fontsource-variable/inter`. The package-manager wrapper also attempted an interactive dependency refresh. These application checks were not rerun for the prose-only expansion. No dependency replacement was performed for this documentation task, and real Docker/model/integration operation was not validated.
 
-This guide is a snapshot of reviewed source. Update it when behavior changes, especially around helper availability, routing, privacy, billing, tool eligibility, model defaults, and integrations. Where old prose and source differ, verify the source and relevant tests before answering.
+This guide is a snapshot of reviewed source. Update it when behavior changes, especially around routing, privacy, billing, tool eligibility, model defaults, and integrations. Where old prose and source differ, verify the source and relevant tests before answering.

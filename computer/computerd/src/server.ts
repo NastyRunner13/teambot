@@ -30,6 +30,7 @@ const routes: Record<string, Handler> = {
   'POST /fs/list': (b) => listFiles(b),
   'POST /browser/navigate': (b) => browser.navigate(String(b.url ?? '')),
   'POST /browser/snapshot': () => browser.snapshot(),
+  'POST /browser/screenshot': () => browser.screenshot(),
   'POST /browser/describe': (b) => browser.describe(b.ref === undefined ? undefined : Number(b.ref)),
   'POST /browser/click': (b) => browser.click(Number(b.ref)),
   'POST /browser/type': (b) =>

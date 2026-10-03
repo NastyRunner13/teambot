@@ -97,6 +97,29 @@ describe.skipIf(!enabled)('agent computer (Docker)', () => {
   );
 
   it(
+    'shows the model the page in the browser as an image',
+    async () => {
+      const page = `<html><head><title>Chart</title></head><body style="height:3000px"><h1>Revenue by quarter</h1></body></html>`;
+      t.models.script('test/ops', [
+        callTool('write_file', { path: '/tmp/chart.html', content: page }),
+        callTool('browser_navigate', { url: 'file:///tmp/chart.html' }),
+        callTool('browser_screenshot', {}),
+        say('Seen it.'),
+      ]);
+      app.workspace.postMessage({ channelId: general(app).id, authorId: t.owner.id, text: '@Ops look at the chart' });
+      await app.runtime.idle(120_000);
+
+      const run = app.store.listRuns({ agentId: ops.id })[0];
+      const shot = app.store.getTranscript<TranscriptMessage>(run.id).find((m) => m.role === 'tool' && (m as { images?: string[] }).images) as { content: string; images: string[] };
+      expect(shot.content).toContain('Screenshot of Chart (file:///tmp/chart.html)');
+      expect(shot.content).toMatch(/scrolled to 0px of 3\d{3}px/);
+      const jpeg = fs.readFileSync(path.join(app.cfg.dataDir, shot.images[0]));
+      expect(jpeg.subarray(0, 2).toString('hex')).toBe('ffd8');
+    },
+    240_000,
+  );
+
+  it(
     'with an allowlist, only allowed sites are reachable, through the proxy, and the agent cannot lift the firewall',
     async () => {
       // A site on the host; the proxy (also on the host) reaches it at 127.0.0.1.

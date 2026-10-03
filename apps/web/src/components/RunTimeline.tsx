@@ -1,10 +1,10 @@
 // Step-by-step view of one run: the agent's thinking, every tool call with its policy decision and result.
-import { Ban, Brain, CheckCircle2, CircleAlert, CirclePause, CirclePlay, Flag, Hand, Loader2, ShieldQuestion, Wallet, Wrench } from 'lucide-react';
+import { Ban, Brain, CheckCircle2, CircleAlert, CirclePause, CirclePlay, Flag, Hand, Loader2, MessageSquareReply, ShieldQuestion, Wallet, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { EventRecord, Run } from '@teambot/shared';
 import { api } from '../api';
 import { timeShort } from '../lib/format';
-import { useStore } from '../store';
+import { memberName, useStore } from '../store';
 
 interface ToolStep {
   kind: 'tool';
@@ -60,7 +60,7 @@ function build(events: EventRecord[]): Item[] {
       const step = tools.get(d.toolCallId);
       if (step) step.finished = { ok: d.ok, ms: d.ms, preview: d.preview, images: d.images };
       else items.push({ kind: 'event', e });
-    } else if (e.type === 'tool.started' || e.type === 'tool.reviewed' || e.type === 'run.input' || e.type === 'run.created') {
+    } else if (e.type === 'tool.started' || e.type === 'tool.reviewed' || e.type === 'run.input' || e.type === 'run.created' || e.type === 'handoff.requested' || e.type === 'message.created') {
       continue;
     } else if (e.type === 'llm.response' && !String(d.text ?? '').trim()) {
       continue;
@@ -111,6 +111,19 @@ function EventRow({ e }: { e: EventRecord }) {
     cls = d.approval?.status === 'approved' || d.approval?.status === 'done' ? 'ok' : 'bad';
     text = `Human answered: ${d.approval?.status}`;
     preview = d.approval?.note;
+  } else if (e.type === 'handoff.answered') {
+    icon = <MessageSquareReply size={13} />;
+    cls = 'ok';
+    text = `${memberName(d.handoff?.toAgentId)} answered`;
+    preview = d.handoff?.task;
+  } else if (e.type === 'handoff.failed') {
+    icon = <CircleAlert size={13} />;
+    cls = 'bad';
+    text = `No answer from ${memberName(d.handoff?.toAgentId)}`;
+    preview = d.handoff?.outcome;
+  } else if (e.type === 'handoff.cancelled') {
+    text = `Stopped waiting for ${memberName(d.handoff?.toAgentId)}`;
+    preview = d.handoff?.task;
   } else if (e.type === 'run.compacted') {
     text = 'Summarized older steps to save context';
   } else if (e.type === 'budget.exceeded') {

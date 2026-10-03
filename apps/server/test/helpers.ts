@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import type { Agent, ComputerStatus, Run } from '@teambot/shared';
+import type { ComputerStatus } from '@teambot/shared';
 import { createApp, type App, type AppOverrides } from '../src/app.js';
 import type { CallOptions, ComputerHandle, ComputerProvider, ComputerSpec } from '../src/computers/types.js';
 import { loadConfig } from '../src/config.js';
@@ -82,6 +82,9 @@ export class FakeComputers implements ComputerProvider {
           const el = body.ref === undefined ? self.elements[1] : self.elements[Number(body.ref)];
           return { url: self.url, element: el ? { ...el, role: 'button' } : null } as T;
         }
+        if (p === '/browser/screenshot') {
+          return { image: Buffer.from('page screenshot').toString('base64'), mime: 'image/jpeg', url: self.url, title: 'Mail', width: 1280, height: 720, scrollY: 0, scrollHeight: 2400 } as T;
+        }
         if (p.startsWith('/browser/')) return { url: self.url, title: 'Mail', snapshot: `snapshot after ${p}` } as T;
         if (p === '/desktop/describe') {
           // A point maps to the element numbered by its x coordinate (x=3 → "Send"); no point means the focused element.
@@ -133,20 +136,5 @@ export function addAgent(app: App, name: string, model = `test/${name.toLowerCas
 }
 
 export const general = (app: App) => app.store.getChannelByName('general')!;
-
-/** Seed persisted helpers from before spawning was removed, to test upgrade compatibility. */
-export function legacyHelpers(app: App, parent: Agent, run: Run, jobs: { title: string; job: string }[], model = parent.model): Agent[] {
-  return jobs.map((job, i) => {
-    const helper = app.store.createAgent({
-      name: `${parent.name}-h${i + 1}`, role: `Helper of ${parent.name}`, instructions: parent.instructions,
-      model, avatar: parent.avatar, color: parent.color, mcpServers: parent.mcpServers, parentId: parent.id,
-    });
-    app.store.addInbox({
-      agentId: helper.id, kind: 'helper', text: `Your job from ${parent.name}: ${job.title}\n${job.job}`,
-      channelId: run.channelId, threadId: run.threadId, depth: run.depth + 1, initiator: run.initiator,
-    });
-    return helper;
-  });
-}
 
 export const messagesIn = (app: App, channelId: string) => app.store.listMessages(channelId, { limit: 200 });
