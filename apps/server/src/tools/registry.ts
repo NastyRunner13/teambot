@@ -4,7 +4,7 @@ import type { ToolSpec } from '../models/types.js';
 import { codingTools } from './coding-tools.js';
 import { computerTools } from './computer-tools.js';
 import { desktopTools } from './desktop-tools.js';
-import { helperTools } from './helper-tools.js';
+import { agentTools } from './agent-tools.js';
 import { knowledgeTools } from './knowledge-tools.js';
 import type { McpManager } from './mcp.js';
 import { toParameters, type ToolDef } from './types.js';
@@ -18,7 +18,7 @@ export class ToolRegistry {
     private mcp: McpManager,
     private app: () => App,
   ) {
-    this.builtins = [...workspaceTools(), ...knowledgeTools(), ...helperTools(), ...computerTools(), ...desktopTools(), ...codingTools()];
+    this.builtins = [...workspaceTools(), ...knowledgeTools(), ...agentTools(), ...computerTools(), ...desktopTools(), ...codingTools()];
   }
 
   forAgent(agent: Agent): ToolDef[] {

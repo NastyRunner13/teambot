@@ -55,14 +55,12 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
         <div className="field">
           <span className="field-label">Agents</span>
           <div className="member-picks">
-            {agents
-              .filter((a) => !a.parentId)
-              .map((a) => (
-                <label key={a.id} className={`member-pick ${members.includes(a.id) ? 'on' : ''}`}>
-                  <input type="checkbox" checked={members.includes(a.id)} onChange={(e) => setMembers(e.target.checked ? [...members, a.id] : members.filter((m) => m !== a.id))} />
-                  <Avatar member={a} size={24} /> {a.name}
-                </label>
-              ))}
+            {agents.map((a) => (
+              <label key={a.id} className={`member-pick ${members.includes(a.id) ? 'on' : ''}`}>
+                <input type="checkbox" checked={members.includes(a.id)} onChange={(e) => setMembers(e.target.checked ? [...members, a.id] : members.filter((m) => m !== a.id))} />
+                <Avatar member={a} size={24} /> {a.name}
+              </label>
+            ))}
           </div>
         </div>
       )}
@@ -96,7 +94,7 @@ export function NewChatView() {
       { key: 'new-agent', label: 'Create new agent', icon: <span className="option-icon"><Plus size={16} /></span>, run: () => setDialog('agent') },
       { key: 'new-group', label: 'Create group chat', icon: <span className="option-icon"><Users size={15} /></span>, run: () => setDialog('group') },
     ].filter((o) => !q || match(o.label));
-    for (const a of agents.filter((x) => !x.parentId && match(x.name))) {
+    for (const a of agents.filter((x) => match(x.name))) {
       list.push({ key: a.id, label: a.name, icon: <Avatar member={a} size={26} />, hint: dmWith(channels, me?.id, a.id) ? 'Open chat' : 'New chat', run: () => navigate(`/agents/${a.id}`) });
     }
     for (const h of humans.filter((x) => x.id !== me?.id && !x.removed && match(x.name))) {

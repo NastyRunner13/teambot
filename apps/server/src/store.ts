@@ -12,6 +12,8 @@ import {
   type ApprovalStatus,
   type Channel,
   type EventRecord,
+  type Handoff,
+  type HandoffStatus,
   type Human,
   type HumanRole,
   type Invite,
@@ -199,6 +201,49 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE runs ADD COLUMN progress TEXT NOT NULL DEFAULT '[]';
   DELETE FROM inbox WHERE kind = 'task' AND run_id IS NULL;
   `,
+  // 16: no helpers. Any left over from before (stopped mid-job by an upgrade) are removed as deleting an agent would,
+  // with their unfinished runs cancelled and undelivered results dropped. Their past runs and events stay as history.
+  `
+  CREATE TEMP TABLE old_helpers AS SELECT id FROM agents WHERE parent_id IS NOT NULL;
+  UPDATE approvals SET status = 'cancelled', resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE status = 'pending' AND run_id IN (SELECT id FROM runs WHERE agent_id IN (SELECT id FROM old_helpers));
+  UPDATE runs SET status = 'cancelled'
+    WHERE agent_id IN (SELECT id FROM old_helpers) AND status IN ('queued', 'running', 'waiting_approval', 'waiting_human', 'paused');
+  DELETE FROM channel_members WHERE member_id IN (SELECT id FROM old_helpers);
+  DELETE FROM inbox WHERE agent_id IN (SELECT id FROM old_helpers);
+  DELETE FROM schedules WHERE agent_id IN (SELECT id FROM old_helpers);
+  UPDATE channels SET lead_agent_id = NULL WHERE lead_agent_id IN (SELECT id FROM old_helpers);
+  DELETE FROM agents WHERE id IN (SELECT id FROM old_helpers);
+  DROP TABLE old_helpers;
+  DELETE FROM inbox WHERE kind = 'helper' AND run_id IS NULL;
+  ALTER TABLE agents DROP COLUMN parent_id;
+  DROP TABLE helper_lineage;
+  `,
+  // 17: one agent asking another (ask_agent): the DM the request is in, where its answer goes, and how it ended
+  `
+  CREATE TABLE handoffs (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    from_agent_id TEXT NOT NULL,
+    to_agent_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    origin_channel_id TEXT,
+    origin_thread_id TEXT,
+    depth INTEGER NOT NULL,
+    initiator TEXT NOT NULL,
+    read_only INTEGER NOT NULL DEFAULT 0,
+    task TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    outcome TEXT,
+    answer_depth INTEGER,
+    delivered INTEGER NOT NULL DEFAULT 0,
+    delay_noted INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    settled_at TEXT
+  );
+  CREATE INDEX handoffs_by_run ON handoffs (run_id);
+  CREATE INDEX handoffs_by_target ON handoffs (to_agent_id, channel_id, status);
+  `,
 ];
 
 type Row = Record<string, SQLInputValue>;
@@ -270,7 +315,6 @@ const toAgent = (r: Row): Agent => ({
   computerImage: (r.computer_image as string) || null,
   desktop: Number(r.desktop) === 1,
   network: { ...OPEN_NETWORK, ...json<Partial<Agent['network']>>(r.network, {}) },
-  parentId: (r.parent_id as string) ?? null,
   createdAt: String(r.created_at),
   updatedAt: String(r.updated_at),
 });
@@ -321,6 +365,27 @@ const toInbox = (r: Row): InboxItem => ({
   readOnly: Number(r.read_only) === 1,
   createdAt: String(r.created_at),
   runId: (r.run_id as string) ?? null,
+});
+
+const toHandoff = (r: Row): Handoff => ({
+  id: String(r.id),
+  runId: String(r.run_id),
+  fromAgentId: String(r.from_agent_id),
+  toAgentId: String(r.to_agent_id),
+  channelId: String(r.channel_id),
+  originChannelId: (r.origin_channel_id as string) ?? null,
+  originThreadId: (r.origin_thread_id as string) ?? null,
+  depth: Number(r.depth),
+  initiator: r.initiator as Handoff['initiator'],
+  readOnly: Number(r.read_only) === 1,
+  task: String(r.task),
+  status: r.status as HandoffStatus,
+  outcome: (r.outcome as string) ?? null,
+  answerDepth: r.answer_depth === null || r.answer_depth === undefined ? null : Number(r.answer_depth),
+  delivered: Number(r.delivered) === 1,
+  delayNoted: Number(r.delay_noted) === 1,
+  createdAt: String(r.created_at),
+  settledAt: (r.settled_at as string) ?? null,
 });
 
 const toApproval = (r: Row): Approval => ({
@@ -526,8 +591,8 @@ export class Store {
 
   // ── agents ────────────────────────────────────────────────────────────
   createAgent(
-    input: Omit<Agent, 'id' | 'kind' | 'status' | 'paused' | 'takeoverBy' | 'createdAt' | 'updatedAt' | 'budget' | 'skills' | 'setupScript' | 'computerImage' | 'desktop' | 'network' | 'parentId'> &
-      Partial<Pick<Agent, 'budget' | 'skills' | 'setupScript' | 'computerImage' | 'desktop' | 'network' | 'parentId'>>,
+    input: Omit<Agent, 'id' | 'kind' | 'status' | 'paused' | 'takeoverBy' | 'createdAt' | 'updatedAt' | 'budget' | 'skills' | 'setupScript' | 'computerImage' | 'desktop' | 'network'> &
+      Partial<Pick<Agent, 'budget' | 'skills' | 'setupScript' | 'computerImage' | 'desktop' | 'network'>>,
   ): Agent {
     const t = now();
     const agent: Agent = {
@@ -538,7 +603,6 @@ export class Store {
       computerImage: input.computerImage ?? null,
       desktop: input.desktop ?? false,
       network: input.network ?? { ...OPEN_NETWORK },
-      parentId: input.parentId ?? null,
       id: newId('agt'),
       kind: 'agent',
       status: 'idle',
@@ -548,11 +612,10 @@ export class Store {
       updatedAt: t,
     };
     this.run(
-      `INSERT INTO agents (id, name, role, instructions, model, avatar, color, status, paused, takeover_by, mcp_servers, skills, budget, setup_script, computer_image, desktop, network, parent_id, created_at, updated_at)
-       VALUES (:id, :name, :role, :instructions, :model, :avatar, :color, :status, :paused, :takeoverBy, :mcpServers, :skills, :budget, :setupScript, :computerImage, :desktop, :network, :parentId, :createdAt, :updatedAt)`,
+      `INSERT INTO agents (id, name, role, instructions, model, avatar, color, status, paused, takeover_by, mcp_servers, skills, budget, setup_script, computer_image, desktop, network, created_at, updated_at)
+       VALUES (:id, :name, :role, :instructions, :model, :avatar, :color, :status, :paused, :takeoverBy, :mcpServers, :skills, :budget, :setupScript, :computerImage, :desktop, :network, :createdAt, :updatedAt)`,
       agent as unknown as Record<string, unknown>,
     );
-    if (agent.parentId) this.run('INSERT OR IGNORE INTO helper_lineage (agent_id, parent_id) VALUES (:id, :parentId)', { id: agent.id, parentId: agent.parentId });
     return agent;
   }
   updateAgent(id: string, patch: Partial<Omit<Agent, 'id' | 'kind' | 'createdAt'>>): Agent {
@@ -817,15 +880,62 @@ export class Store {
     );
     return item;
   }
-  /** Drop an agent's unread items of one kind from one conversation. */
-  dropInbox(agentId: string, kind: InboxItem['kind'], channelId: string | null) {
-    this.run('DELETE FROM inbox WHERE agent_id = :agentId AND kind = :kind AND channel_id IS :channelId AND run_id IS NULL', { agentId, kind, channelId });
-  }
   pendingInbox(agentId: string): InboxItem[] {
     return this.all('SELECT * FROM inbox WHERE agent_id = :agentId AND run_id IS NULL ORDER BY created_at, rowid', { agentId }).map(toInbox);
   }
   consumeInbox(ids: string[], runId: string) {
     for (const id of ids) this.run('UPDATE inbox SET run_id = :runId WHERE id = :id', { id, runId });
+  }
+
+  // ── handoffs (ask_agent) ──────────────────────────────────────────────
+  createHandoff(input: Omit<Handoff, 'id' | 'status' | 'outcome' | 'answerDepth' | 'delivered' | 'delayNoted' | 'createdAt' | 'settledAt'>): Handoff {
+    const h: Handoff = { ...input, id: newId('hnd'), status: 'open', outcome: null, answerDepth: null, delivered: false, delayNoted: false, createdAt: now(), settledAt: null };
+    this.run(
+      `INSERT INTO handoffs (id, run_id, from_agent_id, to_agent_id, channel_id, origin_channel_id, origin_thread_id, depth, initiator, read_only, task, status, created_at)
+       VALUES (:id, :runId, :fromAgentId, :toAgentId, :channelId, :originChannelId, :originThreadId, :depth, :initiator, :readOnly, :task, :status, :createdAt)`,
+      h as unknown as Record<string, unknown>,
+    );
+    return h;
+  }
+  listHandoffs(opts: { runId?: string; fromAgentId?: string; toAgentId?: string; channelId?: string; statuses?: HandoffStatus[] }): Handoff[] {
+    const where: string[] = [];
+    const params: Record<string, unknown> = {};
+    for (const [key, col] of [
+      ['runId', 'run_id'],
+      ['fromAgentId', 'from_agent_id'],
+      ['toAgentId', 'to_agent_id'],
+      ['channelId', 'channel_id'],
+    ] as const) {
+      if (opts[key] !== undefined) {
+        where.push(`${col} = :${key}`);
+        params[key] = opts[key];
+      }
+    }
+    if (opts.statuses?.length) where.push(`status IN (${opts.statuses.map((s) => `'${s}'`).join(', ')})`);
+    return this.all(`SELECT * FROM handoffs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at, rowid`, params).map(toHandoff);
+  }
+  settleHandoff(id: string, status: Exclude<HandoffStatus, 'open'>, outcome: string | null, answerDepth: number | null = null) {
+    this.run('UPDATE handoffs SET status = :status, outcome = :outcome, answer_depth = :answerDepth, settled_at = :at WHERE id = :id', {
+      id,
+      status,
+      outcome,
+      answerDepth,
+      at: now(),
+    });
+  }
+  getHandoff(id: string): Handoff | undefined {
+    const r = this.get('SELECT * FROM handoffs WHERE id = :id', { id });
+    return r && toHandoff(r);
+  }
+  markHandoffsDelivered(ids: string[]) {
+    for (const id of ids) this.run('UPDATE handoffs SET delivered = 1 WHERE id = :id', { id });
+  }
+  markHandoffDelayNoted(id: string) {
+    this.run('UPDATE handoffs SET delay_noted = 1 WHERE id = :id', { id });
+  }
+  /** Messages one run posted, oldest first. */
+  listMessagesByRun(runId: string): Message[] {
+    return this.all('SELECT * FROM messages WHERE run_id = :runId ORDER BY created_at, rowid', { runId }).map(toMessage);
   }
 
   // ── approvals ─────────────────────────────────────────────────────────
@@ -961,20 +1071,14 @@ export class Store {
     return { ...e, id: Number(res.lastInsertRowid), ts };
   }
   /** Model spend recorded since a time, for one agent or the whole workspace. Every model call emits one of `types`. */
-  /** Every helper an agent has ever had, including ones already removed. */
-  helperIdsEver(parentId: string): string[] {
-    return this.all('SELECT agent_id FROM helper_lineage WHERE parent_id = :parentId', { parentId }).map((r) => String(r.agent_id));
-  }
-
-  spendSince(types: string[], since: string, agentIds?: string | string[]): Spend {
-    const ids = agentIds === undefined ? [] : Array.isArray(agentIds) ? agentIds : [agentIds];
+  spendSince(types: string[], since: string, agentId?: string): Spend {
     const p: Record<string, unknown> = { since };
     types.forEach((t, i) => (p[`t${i}`] = t));
-    ids.forEach((id, i) => (p[`a${i}`] = id));
+    if (agentId) p.agentId = agentId;
     const r = this.get(
       `SELECT COALESCE(SUM(json_extract(data, '$.costUsd')), 0) AS usd,
               COALESCE(SUM(COALESCE(json_extract(data, '$.inputTokens'), 0) + COALESCE(json_extract(data, '$.outputTokens'), 0)), 0) AS tokens
-       FROM events WHERE type IN (${types.map((_, i) => `:t${i}`).join(', ')}) AND ts >= :since ${ids.length ? `AND agent_id IN (${ids.map((_, i) => `:a${i}`).join(', ')})` : ''}`,
+       FROM events WHERE type IN (${types.map((_, i) => `:t${i}`).join(', ')}) AND ts >= :since ${agentId ? 'AND agent_id = :agentId' : ''}`,
       p,
     );
     return { usd: Number(r?.usd ?? 0), tokens: Number(r?.tokens ?? 0) };

@@ -11,7 +11,7 @@ import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import { MIGRATIONS, Store } from '../src/store.js';
-import { addAgent, legacyHelpers, messagesIn, testApp } from './helpers.js';
+import { addAgent, messagesIn, testApp } from './helpers.js';
 
 let current: App | null = null;
 let server: FastifyInstance | null = null;
@@ -64,27 +64,13 @@ describe('direct messages', () => {
     expect(app.store.getChannel(dm.id)!.memberIds.sort()).toEqual([owner.id, bob.id].sort());
   });
 
-  it("keeps helpers out of the parent's DM, while they still see what the parent sees", () => {
-    const { app, owner } = setup();
-    const lead = addAgent(app, 'Lead');
-    const dm = app.workspace.getOrCreateDm(owner.id, lead.id);
-    const run = app.store.createRun({ agentId: lead.id, channelId: dm.id, initiator: 'human', depth: 0, title: 'x' });
-    app.auth.enable(owner, 'a long enough password');
-
-    const [helper] = legacyHelpers(app, app.store.getAgent(lead.id)!, run, [{ title: 'Sub-task', job: 'Do the sub-task' }]);
-
-    expect(app.store.getChannel(dm.id)!.memberIds).not.toContain(helper.id);
-    expect(app.workspace.canSee(app.store.getChannel(dm.id)!, helper.id)).toBe(true);
-    expect(app.workspace.canSee(app.store.getChannel(dm.id)!, addAgent(app, 'Stranger').id)).toBe(false);
-  });
-
   it('lists what agents sent elsewhere while working in a conversation', async () => {
     const t = setup();
     const { app, models, owner } = t;
     server = await buildServer(app);
     const writer = addAgent(app, 'Writer');
     const editor = addAgent(app, 'Editor');
-    models.script('test/writer', [callTool('send_dm', { to: 'Editor', text: 'Please own the shortlist.' }), say('Handed it to Editor.')]);
+    models.script('test/writer', [callTool('ask_agent', { to: 'Editor', task: 'Please own the shortlist.', expected_result: 'The final shortlist' }), say('Handed it to Editor.')]);
     const dm = app.workspace.getOrCreateDm(owner.id, writer.id);
 
     app.workspace.postMessage({ channelId: dm.id, authorId: owner.id, text: 'Editor should do this' });
@@ -92,7 +78,7 @@ describe('direct messages', () => {
 
     const sent = (await server.inject({ method: 'GET', url: `/api/channels/${dm.id}/sent` })).json();
     const between = app.workspace.getOrCreateDm(writer.id, editor.id);
-    expect(sent).toMatchObject([{ channelId: between.id, authorId: writer.id, text: 'Please own the shortlist.' }]);
+    expect(sent).toMatchObject([{ channelId: between.id, authorId: writer.id, text: '**Task:** Please own the shortlist.\n\n**A good answer:** The final shortlist' }]);
     expect((await server.inject({ method: 'GET', url: `/api/channels/${between.id}/sent` })).json()).toEqual([]);
   });
 });

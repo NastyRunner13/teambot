@@ -12,7 +12,7 @@ import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
-import { addAgent, nameTaken, removeAgent } from './runtime/helpers.js';
+import { addAgent, nameTaken, removeAgent } from './runtime/agents.js';
 import { routineSecret } from './runtime/triggers.js';
 import { MAX_UPLOAD_BYTES, deleteSharedFile, listShared, openSharedFile, realSharedPath, saveUpload, sharedPath as toSharedPath, toSharedRef } from './shared-files.js';
 import { SKILL_NAME_RE } from './skills.js';

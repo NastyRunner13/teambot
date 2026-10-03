@@ -50,8 +50,6 @@ export class Workspace {
 
   /** In team mode, direct messages that include a person are private to their members. Everything else is shared. */
   canSee(channel: Channel, viewerId: string): boolean {
-    // A helper works in its parent's conversations without joining them, so it sees what its parent sees.
-    viewerId = this.store.getAgent(viewerId)?.parentId ?? viewerId;
     if (!this.app.auth.teamMode || channel.kind !== 'dm' || channel.memberIds.includes(viewerId)) return true;
     return !channel.memberIds.some((id) => this.isHuman(id));
   }
@@ -163,8 +161,8 @@ export class Workspace {
     }
 
     const fromHuman = this.isHuman(input.authorId);
-    // Posting joins a group chat. A DM stays between its two members: an agent working there for them (a helper, a
-    // task's assignee) speaks in it without joining, or the DM would stop being theirs.
+    // Posting joins a group chat. A DM stays between its two members: anyone else who speaks in it doesn't join, or
+    // the DM would stop being theirs.
     if (channel.kind === 'channel' && !channel.memberIds.includes(input.authorId)) this.addMember(channel.id, input.authorId, input.authorId);
     const actor = input.actor ?? humanActor(input.authorId);
     const depth = fromHuman ? 0 : actor.depth + 1;
@@ -213,6 +211,8 @@ export class Workspace {
       for (const m of [...(root ? [root] : []), ...this.store.listThread(message.threadId)]) if (this.store.getAgent(m.authorId)) targets.add(m.authorId);
     }
     targets.delete(message.authorId);
+    // An agent's reply to a teammate that asked it something (ask_agent) goes back to where that teammate asked.
+    if (channel.kind === 'dm' && !this.isHuman(message.authorId)) for (const id of this.app.handoffs.answer(message, channel)) targets.delete(id);
     // Nobody addressed: the channel's lead picks up messages from humans.
     let viaLead = false;
     if (!targets.size && channel.kind === 'channel' && channel.leadAgentId && this.isHuman(message.authorId) && this.store.getAgent(channel.leadAgentId)) {

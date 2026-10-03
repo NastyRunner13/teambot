@@ -9,18 +9,16 @@ export function buildSystemPrompt(app: App, agent: Agent, run: Run): string {
   const humans = app.store.listHumans();
   const channels = app.store.listChannels().filter((c) => c.kind === 'channel');
   const replyTo = run.channelId ? app.store.getChannel(run.channelId) : undefined;
+  // In a DM with another agent, this run is working for that agent.
+  const forAgent = replyTo?.kind === 'dm' ? agents.find((a) => a.id !== agent.id && replyTo.memberIds.includes(a.id)) : undefined;
 
   const roster = [
     ...humans.map((h) => `- ${h.name} (human)`),
-    ...agents.filter((a) => !a.parentId || a.id === agent.id).map((a) => `- ${a.name}${a.id === agent.id ? ' (you)' : ''} — ${a.role || 'agent'}${a.id === agent.id ? '' : ` [${a.status}]`}`),
+    ...agents.map((a) => `- ${a.name}${a.id === agent.id ? ' (you)' : ''} — ${a.role || 'agent'}${a.id === agent.id ? '' : ` [${a.status}]`}`),
   ].join('\n');
 
   const secrets = app.vault.agentNames();
   const coding = run.readOnly ? [] : availableCodingAgents(app);
-  const parent = agent.parentId ? app.store.getAgent(agent.parentId) : undefined;
-  const helperLine = parent
-    ? `- You are a short-lived helper ${parent.name} started for one job (below). Do that job only. Your final reply is your result and goes to ${parent.name}, not to the chat, so put everything they need in it (findings, file paths, anything you couldn't do). You leave the team as soon as you reply.\n`
-    : '';
   const skills = app.skills.forAgent(agent);
   const skillSection = skills.length
     ? `\n## Skills\nWritten procedures your team wants followed. When a job matches one, call use_skill with its name before you start, then follow it.\n${skills.map((s) => `- ${s.name}: ${s.description}`).join('\n')}\n`
@@ -38,13 +36,13 @@ Channels: ${channels.map((c) => `#${c.name}${c.memberIds.includes(agent.id) ? ''
 
 ## How you work
 - You have your own Linux computer: a terminal, files and a Chromium browser that humans can watch live and take over. Your home is /home/agent and your working folder is /home/agent/workspace. /shared is a folder all teammates and humans can see — put deliverables there and mention their full path (e.g. /shared/report.md).
-- Talk to people only through tools: post_message for channels, send_dm for direct messages. Writing @Name in a message wakes that teammate up and hands them your message — only mention someone when you need them to act, and never mention yourself.
-- When you are done, end with a short final reply. It is posted automatically to ${replyTo ? `${ws.channelLabel(replyTo, agent.id)}${run.threadId ? ' (in the thread you were asked from)' : ''}` : 'the conversation you were asked from'}. If there is nothing useful to say (for example you were only cc'd), reply with exactly [silent].
-- To hand someone a file, put it in /shared and attach it to your message (the attachments argument of post_message or send_dm).
+- Talk to people only through tools: post_message for channels, send_dm to message a person directly, and ask_agent to hand a teammate agent work. Writing @Name in a channel message wakes that teammate up and hands them your message — only mention someone when you need them to act, and never mention yourself.
+- When you are done, end with a short final reply. It is posted automatically to ${replyTo ? `${ws.channelLabel(replyTo, agent.id)}${run.threadId ? ' (in the thread you were asked from)' : ''}` : 'the conversation you were asked from'}.${forAgent ? ` You are working for ${forAgent.name} here, so that reply is your answer to them: make it complete.` : ''} If there is nothing useful to say (for example you were only cc'd), reply with exactly [silent].
+- To hand someone a file, put it in /shared and attach it to your message (the attachments argument of post_message, send_dm or ask_agent).
 - For a job with several steps, write your plan with ${PROGRESS_TOOL} before you start and keep it current: the step you are on in_progress, each finished step done, and the list changed when the plan does. The person you work for watches it to follow along. Skip it for quick answers.
-- Work independently by default: do your own research, reasoning and execution with your tools, even when the job has several independent parts. Temporary helper bots are not available.
+- Work independently by default: do your own research, reasoning and execution with your tools, even when the job has several independent parts.
 - Ask an existing agent for help only when its stated role in the Team roster shows a specific specialty relevant to the task. Do not involve other agents for routine work you can handle, just because they are available, or just to split work in parallel. If no specialty fits, do the work yourself.
-- When a specialist is useful, use send_dm with a focused request, the relevant context and the result you need. Continue any work you can do independently; their reply comes back to you. Review their findings and take responsibility for the final answer. Do not send acknowledgements or repeated handoffs that needlessly wake teammates. There is no task board.
+- When a specialist is useful, call ask_agent with the task, the context they need (they can't see your conversation), any constraints, and what a good answer looks like. You can hand work to at most ${app.cfg.maxHandoffsPerRun} teammates per job. Their answer comes back to you here; carry on with anything that doesn't depend on it. Review their findings and take responsibility for the final answer. Don't send acknowledgements, and don't repeat a request that is still open. There is no task board.
 - Some actions need a human's approval, or must be done by a human; you will be paused and resumed with the outcome. Before anything irreversible the system might not catch — sending things to people outside the team, spending money, deleting data — call ask_for_approval.
 - If a site needs a login, 2FA or a CAPTCHA, call request_human_takeover and say exactly what you need.
 - Secrets: never ask humans to paste passwords into chat. To use a stored secret, write {{secret:NAME}} inside a tool argument; it is filled in when the tool runs and you never see the value. Available secrets: ${secrets.length ? secrets.join(', ') : 'none'}.
@@ -53,7 +51,7 @@ Channels: ${channels.map((c) => `#${c.name}${c.memberIds.includes(agent.id) ? ''
 - Do what you were asked: the message or job in front of you. Plans in old messages and leftovers in /shared are not yours to pick up, finish or repair unless a person asks you to. If something looks abandoned or broken, say so in your reply and let a person decide.
 - Answer a greeting, a thank-you or a quick question directly, without looking through channels or files first. When a teammate's message needs nothing from you (a hello, an acknowledgement, a "sounds good"), reply in one line or [silent], and don't start work or a new conversation from it.
 - To find something from earlier (a decision, a link, a result), use search_history. Old messages can point to files that were deleted since; check a file exists before sending someone to it.
-${helperLine}${agent.desktop ? '- You also have the whole desktop: computer_screenshot to see the screen, then computer_click/type/key/scroll/drag with pixel coordinates from the latest screenshot. Prefer browser_* tools for web pages (they are faster and more precise); use the desktop for other apps, file dialogs, or pages the browser tools cannot handle.\n' : ''}${coding.length ? `- For substantial programming work, hand the task to a coding agent with run_coding_agent (${coding.join(', ')}). Give it the folder and a precise task, then check its report and the result yourself.\n` : ''}${run.readOnly ? '- This run is READ-ONLY (a monitoring routine): you can look at pages, files and the workspace, but tools that change things are not available. Report what you find; if nothing needs attention, reply [silent].\n' : ''}${skillSection}
+${agent.desktop ? '- You also have the whole desktop: computer_screenshot to see the screen, then computer_click/type/key/scroll/drag with pixel coordinates from the latest screenshot. Prefer browser_* tools for web pages (they are faster and more precise); use the desktop for other apps, file dialogs, or pages the browser tools cannot handle.\n' : ''}${coding.length ? `- For substantial programming work, hand the task to a coding agent with run_coding_agent (${coding.join(', ')}). Give it the folder and a precise task, then check its report and the result yourself.\n` : ''}${run.readOnly ? '- This run is READ-ONLY (a monitoring routine): you can look at pages, files and the workspace, but tools that change things are not available. Report what you find; if nothing needs attention, reply [silent].\n' : ''}${skillSection}
 ${app.memory.promptSection(agent)}
 
 Current time: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
@@ -65,8 +63,7 @@ export function formatInbox(app: App, agent: Agent, items: InboxItem[], firstInR
   const parts: string[] = [];
 
   if (firstInRun) {
-    // A helper's job and its results belong to the conversation it works for, so they get its context too.
-    const first = items.find((i) => (i.kind === 'message' || i.kind === 'helper') && i.channelId);
+    const first = items.find((i) => i.kind === 'message' && i.channelId);
     const channel = first?.channelId ? app.store.getChannel(first.channelId) : undefined;
     if (first && channel) {
       // In a thread, the context is the thread itself; otherwise the channel's recent top-level messages.

@@ -230,7 +230,7 @@ function Installed() {
   const { telegram, slack } = useBridges();
   const skills = useStore((s) => s.skills);
   const agents = useStore((s) => s.agents);
-  const users = (name: string) => agents.filter((a) => !a.parentId && (a.mcpServers.includes(name) || a.mcpServers.includes('*'))).length;
+  const users = (name: string) => agents.filter((a) => a.mcpServers.includes(name) || a.mcpServers.includes('*')).length;
 
   const rows = servers.map((s) => {
     const app = entryOf(s);
@@ -323,12 +323,11 @@ function AppHead({ tile, name, sub, state, actions }: { tile: ReactNode; name: s
   );
 }
 
-/** Switches for the permanent agents (helpers use their parent's apps). */
+/** A switch per agent for using this app. */
 function AgentAccess({ name, label }: { name: string; label: string }) {
   const agents = useStore((s) => s.agents);
   const notify = useStore((s) => s.notify);
   const canManage = useCanManage();
-  const team = useMemo(() => agents.filter((a) => !a.parentId), [agents]);
 
   async function set(agent: Agent, on: boolean) {
     const mcpServers = on ? [...agent.mcpServers, name] : agent.mcpServers.filter((x) => x !== name);
@@ -342,7 +341,7 @@ function AgentAccess({ name, label }: { name: string; label: string }) {
 
   return (
     <SettingGroup title="Agents with access" description="An agent gets this app's tools only when it is on here. Every call still passes your action policy, which asks you first by default.">
-      {team.map((a) => {
+      {agents.map((a) => {
         const all = a.mcpServers.includes('*');
         return (
           <SettingRow key={a.id} lead={<Avatar member={a} size={30} />} title={a.name} description={all ? 'Has every app' : a.role}>
@@ -350,7 +349,7 @@ function AgentAccess({ name, label }: { name: string; label: string }) {
           </SettingRow>
         );
       })}
-      {!team.length && <SettingRow title="No agents yet" description={<><Link href="/new">Create an agent</Link>, then come back to let it use {label}.</>} />}
+      {!agents.length && <SettingRow title="No agents yet" description={<><Link href="/new">Create an agent</Link>, then come back to let it use {label}.</>} />}
     </SettingGroup>
   );
 }
