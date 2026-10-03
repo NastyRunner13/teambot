@@ -86,7 +86,7 @@ flowchart TB
 | Explicit task ownership, hand-off, reassign | ✅ | ✗ | ✅ | ✗ | ✅ | ✗ | ✗ | ✗ | **P0**; removed 2026-10-02 (hand-offs by message) |
 | Shared task board with dependencies | ✗ | ✗ | ✗ | ✗ | ◐ queues | ✗ | ✗ | ✗ | **P0** (Claude Agent Teams model); removed 2026-10-02 for per-run progress checklists |
 | Lead or chief-of-staff agent | ✅ | ✗ | ◐ | ◐ orchestrator | ◐ | ✗ | ✗ | ✗ | **P1** |
-| Spawn short-lived sub-agents or workers | ✅ Cloud Agents | ✅ Codex | ✗ | ✅ | ◐ via CLIs | ✗ | ◐ | ◐ | **P1** |
+| Spawn short-lived sub-agents or workers | ✅ Cloud Agents | ✅ Codex | ✗ | ✅ | ◐ via CLIs | ✗ | ◐ | ◐ | **P1**; removed 2026-10-02 (agents work alone or ask a specialist teammate) |
 | Shared files and artifact hand-off | ✅ shared VM | ✅ Space | ✗ | n/a | ✅ transfer manifests | ◐ | ◐ | ◐ | **P0** |
 | Talk to agents on *other* platforms (A2A) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **P2** (nobody has it) |
 
@@ -242,7 +242,7 @@ No single product, open or closed, covers all six of these:
 |---|---|
 | Reviewer model | ✅ `review` policy action; fails closed to asking a human. Default rules send risky shell commands, coding-agent tasks and team-memory changes to it. |
 | Untrusted-content tagging | ✅ Browser, file, shell, MCP, webhook, email, Slack and calendar content is wrapped in `<untrusted_content>`. |
-| Spend and token budgets | ✅ Daily/monthly USD and daily token caps per agent, plus a workspace daily cap. Historical helper spend still counts against its parent's budget. |
+| Spend and token budgets | ✅ Daily/monthly USD and daily token caps per agent, plus a workspace daily cap. |
 | CEL policies | ✅ Optional `when:` on any rule (CEL via `@marcbachmann/cel-js`): tool, risk, agent, initiator, domain, args, time of day, weekday and spend today. A broken expression is rejected on save; one that fails at run time makes restrictive rules match and allow rules not (fails closed). |
 | Egress proxy and allowlists | ✅ Per agent: open, or an allowlist of domains. Restricted computers are firewalled (iptables, set from outside the container) so their own proxy port is the only way out; blocked requests show up under Blocked sites in the Computer tab of the agent's panel. Works with the server on the host or in Docker Compose. |
 | Skills (SKILL.md) | ✅ Files in `data/skills`, editor under Connect apps → Skills, per-agent access, supporting files copied to the computer. |
@@ -254,7 +254,7 @@ No single product, open or closed, covers all six of these:
 | Lead agent | ✅ A channel's lead answers messages that mention nobody. |
 | Base images, setup scripts, sleep/snapshot, idle shutdown | ✅ Per-agent image and setup script; idle computers sleep; snapshots save and restore an agent's home folder. |
 | Messaging bridges | ✅ Telegram (bot token, pairing code) and Slack (Socket Mode app from a manifest): DMs with agents, approvals with buttons, files both ways. |
-| Full GUI desktop computer use | ✅ Opt-in per agent: screenshots plus mouse and keyboard tools on the whole desktop (xdotool), with clicks described to the policy by what is under the pointer. |
+| Full GUI desktop computer use | ✅ Opt-in per agent: screenshots plus mouse and keyboard tools on the whole desktop (xdotool), with clicks described to the policy by what is under the pointer. Every agent on a model that accepts images also has `browser_screenshot`, to read charts and tables that pages draw as images. |
 | Coding-agent adapter | ✅ `run_coding_agent` runs Claude Code, Codex or Gemini CLI inside the agent's computer, offered when its API key is a stored secret; the key goes to the CLI's environment only. |
 | Independent work and specialist collaboration | ✅ Temporary helper spawning removed. Agents research and execute independently by default, requesting help from an existing teammate only when its stated specialty fits the task. |
 | OAuth app connectors | ✅ Remote MCP servers added under Connect apps with OAuth sign-in (discovery, dynamic client registration, PKCE and refresh via the MCP SDK), or with a pasted token sent in a header (GitHub). A marketplace lists about 35 vendors' own servers, checked to accept TeamBot's sign-in; anything else is added by URL. Credentials are reserved secrets; each app's page switches agents on or off, and calls default to `ask`. |
@@ -272,7 +272,7 @@ Not done, on purpose: the database stays SQLite. One server with a small team fi
 - **Activity became work notes:** a live line while an agent works for a chat, a "Worked for … · N steps" note above its reply, and the run's full log in the panel. The Activity page is gone.
 - **Tasks** became something agents used among themselves; the Tasks page is gone, and old `/tasks`, `/approvals` and `/activity` links redirect. (The board itself went next; see below.)
 - **Agents messaging each other:** your chat shows "Messaged Job Scout" where it happened, and that opens the two agents' conversation, which you can read but not post in (you step in from your own chat with either agent). Each live line names the agent when it isn't the one you're chatting with.
-- **A DM stays between its two members.** Naming a teammate in a chat with an agent leaves it to that agent to bring them in, instead of waking them in your DM. Helpers who work for a DM speak there without joining it. A one-time migration repaired DMs that had gained members and merged the empty copies the app had opened back into them.
+- **A DM stays between its two members.** Naming a teammate in a chat with an agent leaves it to that agent to bring them in, instead of waking them in your DM. A one-time migration repaired DMs that had gained members and merged the empty copies the app had opened back into them.
 - **Connect apps** gathers MCP connectors, `mcp.json` servers, Telegram, Slack, skills and shared files on one page.
 
 ### Settings frame and app marketplace (2026-10-03) ✅ built
@@ -290,10 +290,20 @@ Not done, on purpose: the database stays SQLite. One server with a small team fi
 *At the owner's request: agents shouldn't file, assign or adopt tasks, or keep working on their own. They should show their progress the way Claude does.*
 
 - **Progress checklist per run.** `update_progress` sets the agent's plan for the job in front of it (steps pending, in progress or done), saved on the run and sent live. The chat's live line names the step it is on with a count ("· 1 of 4") and shows the whole checklist below, open by default; the finished note keeps it ("Worked for 2m · 5 steps"), and so does the run's page in the panel. Keeping the list isn't counted as an action.
-- **No task tools.** `create_task`, `update_task` and `list_tasks` are gone, along with the task API, the open-tasks part of the prompt and task results in search. Agents hand each other work by message (`send_dm`), which shows in your chat as "Messaged …".
+- **No task tools.** `create_task`, `update_task` and `list_tasks` are gone, along with the task API, the open-tasks part of the prompt and task results in search. Agents hand each other work by message (now `ask_agent`, see below), which shows in your chat as "Messaged …".
 - **No follow-ups.** The sweep that woke agents about quiet tasks (`TEAMBOT_STALE_TASK_HOURS`) is gone, so an agent only works when a person, a routine or a teammate's message asks it to.
-- **Temporary helper spawning removed (2026-10-02).** Agents do their own research and execution, even for work with independent parts. They consult an existing teammate through `send_dm` only for relevant specialist expertise. Helpers persisted before this change can still finish, report back and be cleaned up; their historical spend stays on the parent's budget.
+- **Temporary helper spawning removed (2026-10-02).** Agents do their own research and execution, even for work with independent parts. They consult an existing teammate (now through `ask_agent`) only for relevant specialist expertise. The compatibility code that let helpers saved before the change finish went on 2026-10-03; migration 16 removes any left over, and their past runs stay as history.
 - The old tasks stay in the database as history, untouched; unread task notices were dropped (migration 15).
+
+### Harness improvements (2026-10-03, in progress)
+
+*Changes to how agents work, after comparing the harness with CopilotKit's OpenBot: handoffs that say what is wanted and always come back, and answers that say where they came from.*
+
+- **`ask_agent`** replaces `send_dm` for agent-to-agent work (`send_dm` is now for people). It takes the task, the context the teammate can't see, any constraints, and what a good answer looks like, and posts them as a structured request in the two agents' DM.
+- **The answer comes back where it was asked.** The asked agent's reply goes to the conversation the asking run worked in, not the agents' DM, with all of one run's answers in one message. An agent asked by another agent can ask a third and answer once it hears back.
+- **Nothing is silently dropped.** A request whose run fails, is stopped, ends without a reply or hits the step limit, or whose agent is removed, is reported to the asker with the reason; running out of budget mid-answer is reported once. A late answer to a stopped run wakes nobody.
+- **Limits:** a run may hand work to `TEAMBOT_MAX_HANDOFFS_PER_RUN` teammates (default 4, counting @mentions of agents in group chats), and `ask_agent` refuses paused or over-budget agents and jobs past the agent-hop limit, with a reason the agent can act on.
+- **Sources and evidence (prompt rules).** Agents say where an answer came from: they name what they read, say briefly when they answer from their own knowledge, and mark figures, prices, dates, deadlines and rules as unverified when nothing they can reach confirms them, without going hunting for something to cite. They report only actions a tool result shows happened, and say plainly when a step failed, was blocked or never ran.
 
 ### P2: teams and ecosystem
 
@@ -302,7 +312,7 @@ Not done, on purpose: the database stays SQLite. One server with a small team fi
 - **Learn by demonstration:** record yourself doing the task, and it becomes a draft skill.
 - **Self-improving skills**, with every skill change behind human review (see the "skill misevolution" research).
 - **Templates and marketplace** for agents and skills, with **skill vetting** (static scan plus sandboxed dry run). Plan: a *plugin* bundles skills, apps and agent templates, in Claude Code's plugin format (`.claude-plugin/plugin.json`, `skills/*/SKILL.md`, `.mcp.json`), installed from a git repository that lists plugins in `.claude-plugin/marketplace.json`. Remote servers in a plugin become connectors; local (stdio) servers run inside each agent's computer, not on the TeamBot host; commands and hooks have no TeamBot equivalent and are skipped.
-- ✅ **Agents add teammates** (built 2026-10-02, ahead of the rest of P2): `create_agent` proposes a permanent agent with its own role and instructions for an ongoing specialty no existing teammate covers, not for temporary or parallel work. The default policy asks a human first. The new agent gets its creator's network rules and budget caps, only skills and MCP servers the creator has, and no desktop or custom image. Each agent can have at most five such agents on the team at once; legacy helpers can't use it.
+- ✅ **Agents add teammates** (built 2026-10-02, ahead of the rest of P2): `create_agent` proposes a permanent agent with its own role and instructions for an ongoing specialty no existing teammate covers, not for temporary or parallel work. The default policy asks a human first. The new agent gets its creator's network rules and budget caps, only skills and MCP servers the creator has, and no desktop or custom image. Each agent can have at most five such agents on the team at once.
 - Co-edited docs with @mention and comments, and generative-UI replies.
 - SSO, SCIM, RBAC, org rules members can't loosen, team secrets, Admin API.
 - More computer backends: E2B, Cua, Firecracker. Opt-in bridge to the user's own machine. Mobile app.

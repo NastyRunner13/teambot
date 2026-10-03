@@ -9,3 +9,4 @@ coverage/
 mcp.json
 .claude/worktrees/
 .pnpm-store
+docs/course
