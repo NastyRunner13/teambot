@@ -106,6 +106,21 @@ export function markMissingFiles(sharedDir: string, text: string): string {
   });
 }
 
+/** The existing files in /shared that text names, in the order it names them ("Saved /shared/report.md."). */
+export function sharedFilesIn(sharedDir: string, text: string): string[] {
+  const found = new Set<string>();
+  for (const [match] of text.matchAll(SHARED_REF)) {
+    const ref = match.replace(/[.:!?]+$/, '');
+    try {
+      const real = realSharedPath(sharedDir, ref);
+      if (real && fs.statSync(real).isFile()) found.add(toSharedRef(sharedDir, sharedPath(sharedDir, ref)));
+    } catch {
+      // It leads outside /shared: not a file to hand anyone.
+    }
+  }
+  return [...found];
+}
+
 /** Make a file name safe and readable: no folders, no control characters, nothing hidden. */
 export function cleanFileName(name: string): string {
   const base = path.basename(name.replace(/\\/g, '/')).replace(/[\u0000-\u001f<>:"|?*]/g, '_').trim();

@@ -3,7 +3,7 @@
 import { ACTIVE_RUN_STATUSES, type Agent, type Channel, type Human, type Initiator, type Member, type Message, type Widget } from '@teambot/shared';
 import type { App } from './app.js';
 import { componentToolName } from './components.js';
-import { attachmentFor, formatBytes } from './shared-files.js';
+import { attachmentFor, formatBytes, sharedFilesIn } from './shared-files.js';
 import { NAME_RE, parseMentions, truncate } from './util.js';
 
 /** Who is acting, and how far this action is from a human request (for the agent loop guard). */
@@ -161,11 +161,17 @@ export class Workspace {
   }): Message {
     const channel = this.store.getChannel(input.channelId);
     if (!channel) throw new Error('channel not found');
-    const text = input.text.trim();
-    const attachments = [...new Set(input.attachments ?? [])].map((p) => attachmentFor(this.app.cfg.sharedDir, p));
+    // SQLite keeps text only up to its first null byte, so a message with one would be saved cut off, or empty.
+    const text = input.text.replaceAll('\u0000', '').trim();
+    const fromHuman = this.isHuman(input.authorId);
+    const sharedDir = this.app.cfg.sharedDir;
+    const chosen = [...new Set(input.attachments ?? [])].map((p) => attachmentFor(sharedDir, p));
+    if (chosen.length > 20) throw new Error('attach at most 20 files to one message');
+    // An agent's message carries the /shared files it names, so "Saved /shared/report.md" arrives as a file to open.
+    const named = fromHuman ? [] : sharedFilesIn(sharedDir, text).map((p) => attachmentFor(sharedDir, p));
+    const attachments = [...new Map([...chosen, ...named].map((a) => [a.path, a])).values()].slice(0, 20);
     if (!text && !attachments.length && !input.widget) throw new Error('message is empty');
     if (text.length > 20_000) throw new Error('message is too long (max 20,000 characters)');
-    if (attachments.length > 20) throw new Error('attach at most 20 files to one message');
 
     let threadId: string | null = null;
     if (input.threadId) {
@@ -174,7 +180,6 @@ export class Workspace {
       threadId = root.threadId ?? root.id;
     }
 
-    const fromHuman = this.isHuman(input.authorId);
     // Posting joins a group chat. A DM stays between its two members: anyone else who speaks in it doesn't join, or
     // the DM would stop being theirs.
     if (channel.kind === 'channel' && !channel.memberIds.includes(input.authorId)) this.addMember(channel.id, input.authorId, input.authorId);
