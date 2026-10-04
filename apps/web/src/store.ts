@@ -12,6 +12,7 @@ import {
   type Human,
   type McpServerStatus,
   type Message,
+  type PageSummary,
   type Run,
   type RunSummary,
   type Schedule,
@@ -78,6 +79,8 @@ interface State {
   /** A /shared file open in the preview dialog. */
   preview: string | null;
   toast: { text: string; kind: 'info' | 'error' } | null;
+  /** Pages, most recently changed first: loaded when first needed (null until then), then kept live. */
+  pages: PageSummary[] | null;
 
   init(): Promise<void>;
   refresh(): Promise<void>;
@@ -96,6 +99,7 @@ interface State {
   toggleSidebar(): void;
   openFile(path: string | null): void;
   notify(text: string, kind?: 'info' | 'error'): void;
+  loadPages(): Promise<void>;
 }
 
 const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
@@ -157,6 +161,7 @@ export const useStore = create<State>((set, get) => ({
   sidebarCollapsed: remembered('teambot-sidebar') === 'collapsed',
   preview: null,
   toast: null,
+  pages: null,
 
   async init() {
     if (socket) return;
@@ -274,7 +279,16 @@ export const useStore = create<State>((set, get) => ({
     set({ toast: { text, kind } });
     toastTimer = setTimeout(() => set({ toast: null }), kind === 'error' ? 6000 : 3500);
   },
+
+  async loadPages() {
+    const pages = await api.get<PageSummary[]>('/pages');
+    set({ pages });
+  },
+
+
 }));
+
+const byNewest = (a: PageSummary, b: PageSummary) => b.updatedAt.localeCompare(a.updatedAt);
 
 function connect() {
   socket = new WebSocket(wsUrl('/ws'));
@@ -377,6 +391,8 @@ function apply(e: EventRecord) {
     if (e.type.startsWith('connector.') && d.servers && s.health) next.health = { ...s.health, mcpServers: d.servers as McpServerStatus[] };
     if (e.type === 'human.joined' && d.human) next.humans = upsert(s.humans, d.human as Human);
     if (e.type === 'human.removed' && d.human) next.humans = s.humans.filter((h) => h.id !== d.human.id);
+    if ((e.type === 'page.created' || e.type === 'page.updated') && d.page && s.pages) next.pages = upsert(s.pages, d.page as PageSummary).sort(byNewest);
+    if (e.type === 'page.deleted' && s.pages) next.pages = s.pages.filter((p) => p.id !== d.id);
     if (e.type === 'team.enabled') next.teamMode = true;
     if (e.type === 'team.disabled') next.teamMode = false;
     if (e.type === 'human.updated' && d.human) {

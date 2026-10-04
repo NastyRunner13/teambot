@@ -7,6 +7,7 @@ import { desktopTools } from './desktop-tools.js';
 import { agentTools } from './agent-tools.js';
 import { knowledgeTools } from './knowledge-tools.js';
 import type { McpManager } from './mcp.js';
+import { pageTools } from './page-tools.js';
 import { routineTools } from './routine-tools.js';
 import { toParameters, type ToolDef } from './types.js';
 import { workspaceTools } from './workspace-tools.js';
@@ -19,7 +20,7 @@ export class ToolRegistry {
     private mcp: McpManager,
     private app: () => App,
   ) {
-    this.builtins = [...workspaceTools(), ...knowledgeTools(), ...agentTools(), ...routineTools(), ...computerTools(), ...desktopTools(), ...codingTools()];
+    this.builtins = [...workspaceTools(), ...pageTools(), ...knowledgeTools(), ...agentTools(), ...routineTools(), ...computerTools(), ...desktopTools(), ...codingTools()];
   }
 
   forAgent(agent: Agent): ToolDef[] {

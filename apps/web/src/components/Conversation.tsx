@@ -382,6 +382,8 @@ export function Conversation({
   empty,
   partnerId,
   readOnly,
+  prefix,
+  beforeSend,
 }: {
   channelId: string;
   placeholder: string;
@@ -390,9 +392,18 @@ export function Conversation({
   partnerId?: string;
   /** Shown instead of the composer in a conversation you only watch. */
   readOnly?: React.ReactNode;
+  /** Put before what you send, e.g. a link to the page you are asking about. */
+  prefix?: string;
+  /** Runs before a message is sent (e.g. saving the page it is about, so the agent reads the latest). */
+  beforeSend?: () => Promise<unknown>;
 }) {
   const messages = useStore((s) => s.messages[channelId] ?? EMPTY);
-  const sent = useStore((s) => s.sent[channelId] ?? EMPTY);
+  // "Messaged …" notes are for people following their own chats, not for a DM between agents that you only watch.
+  const watching = useStore((s) => {
+    const channel = s.channels.find((c) => c.id === channelId);
+    return channel?.kind === 'dm' && !!s.me && !channel.memberIds.includes(s.me.id);
+  });
+  const sent = useStore((s) => (watching ? EMPTY : (s.sent[channelId] ?? EMPTY)));
   const loaded = useStore((s) => channelId in s.messages);
   const loadMessages = useStore((s) => s.loadMessages);
   const approvals = useStore((s) => s.approvals);
@@ -411,7 +422,8 @@ export function Conversation({
   async function send(text: string, attachments: string[]) {
     pin();
     try {
-      await api.post(`/channels/${channelId}/messages`, { text, attachments });
+      await beforeSend?.();
+      await api.post(`/channels/${channelId}/messages`, { text: prefix && text ? `${prefix}\n\n${text}` : text, attachments });
     } catch (err) {
       notify((err as Error).message, 'error');
       throw err;

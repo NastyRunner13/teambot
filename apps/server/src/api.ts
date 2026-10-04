@@ -7,9 +7,10 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, MAX_PAGE_CHARS, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
 import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
+import { PageConflict, PageError } from './pages.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
 import { addAgent, nameTaken, removeAgent } from './runtime/agents.js';
@@ -968,7 +969,37 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     });
   });
 
-  // ── memory & search ──────────────────────────────────────────────────
+  // ── pages (documents people and agents edit together) ────────────────
+  // Pages belong to the whole workspace, like /shared. A save names the revision it started from; when the page has
+  // moved on, the answer is 409 with the page as it is now, and the editor keeps its draft.
+  const pageCall = <T>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof PageError && !(err instanceof PageConflict)) throw new HttpError(err.status, err.message);
+      throw err;
+    }
+  };
+  server.get('/api/pages', async () => app.pages.list());
+  server.post('/api/pages', async (req) => {
+    const input = parse(z.object({ title: z.string(), content: z.string().max(MAX_PAGE_CHARS).default('') }), req.body);
+    return pageCall(() => app.pages.create(input, me(req).id));
+  });
+  server.get<{ Params: { id: string } }>('/api/pages/:id', async (req) => pageCall(() => app.pages.get(req.params.id)));
+  server.patch<{ Params: { id: string } }>('/api/pages/:id', async (req, reply) => {
+    const { expectedRevision, ...patch } = parse(z.object({ title: z.string().optional(), content: z.string().optional(), expectedRevision: z.number().int().min(1) }), req.body);
+    try {
+      return pageCall(() => app.pages.update(req.params.id, patch, expectedRevision, me(req).id));
+    } catch (err) {
+      if (err instanceof PageConflict) return reply.code(409).send({ error: err.message, page: err.current });
+      throw err;
+    }
+  });
+  server.delete<{ Params: { id: string } }>('/api/pages/:id', async (req) => {
+    pageCall(() => app.pages.remove(req.params.id, me(req).id));
+    return { ok: true };
+  });
+
   const MemoryInput = z.object({ content: z.string().max(MAX_MEMORY_BYTES) });
   server.get('/api/memory/team', async () => ({ content: app.memory.read('team') }));
   server.put('/api/memory/team', async (req) => {

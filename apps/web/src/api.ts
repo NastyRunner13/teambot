@@ -5,6 +5,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** The response, e.g. the page as it is now with a 409. */
+    readonly body: unknown = null,
   ) {
     super(message);
   }
@@ -32,7 +34,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/auth')) onSignedOut();
     const message = (data as { error?: string } | null)?.error ?? `Request failed (${res.status})`;
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, data);
   }
   return data as T;
 }

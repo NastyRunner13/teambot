@@ -191,4 +191,6 @@ export function workspaceTools(): ToolDef[] {
 export const FORCED_APPROVAL_TOOLS: Record<string, 'approval' | 'takeover'> = {
   ask_for_approval: 'approval',
   request_human_takeover: 'takeover',
+  // Review before saving: a person approves the draft page (page-tools.ts).
+  propose_page: 'approval',
 };

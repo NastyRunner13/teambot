@@ -477,7 +477,7 @@ Don't run it again just to see the result; check the current state instead.`
       return result(`Error: invalid arguments for ${tool.name}: ${truncate(detail, 1000)}`);
     }
 
-    const ctx: ToolContext = { app: this.app, agent, run, signal, computer: () => this.app.lifecycle.ready(agent) };
+    const ctx: ToolContext = { app: this.app, agent, run, callId: call.id, signal, computer: () => this.app.lifecycle.ready(agent) };
     const redactArgs = (a: Record<string, unknown>) => JSON.parse(vault.redact(JSON.stringify(a))) as Record<string, unknown>;
     const forced = FORCED_APPROVAL_TOOLS[tool.name];
 

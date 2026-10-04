@@ -50,6 +50,14 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
                 </a>
               );
             }
+            // Links within TeamBot (a page an agent wrote, a conversation) open in place.
+            if (href?.startsWith('/') && !href.startsWith('//')) {
+              return (
+                <a href={href} onClick={(e) => (e.preventDefault(), navigate(href))}>
+                  {children}
+                </a>
+              );
+            }
             return (
               <a href={href} target="_blank" rel="noreferrer noopener">
                 {children}
