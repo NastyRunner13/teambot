@@ -87,7 +87,7 @@ flowchart TB
 | Shared task board with dependencies | ✗ | ✗ | ✗ | ✗ | ◐ queues | ✗ | ✗ | ✗ | **P0** (Claude Agent Teams model); removed 2026-10-02 for per-run progress checklists |
 | Lead or chief-of-staff agent | ✅ | ✗ | ◐ | ◐ orchestrator | ◐ | ✗ | ✗ | ✗ | **P1** |
 | Spawn short-lived sub-agents or workers | ✅ Cloud Agents | ✅ Codex | ✗ | ✅ | ◐ via CLIs | ✗ | ◐ | ◐ | **P1**; removed 2026-10-02 (agents work alone or ask a specialist teammate) |
-| Shared files and artifact hand-off | ✅ shared VM | ✅ Space | ✗ | n/a | ✅ transfer manifests | ◐ | ◐ | ◐ | **P0** |
+| Shared files and artifact hand-off | ✅ shared VM | ✅ Space | ✗ | n/a | ✅ transfer manifests | ◐ | ◐ | ◐ | **P0**; ✅ 2026-10-05: files an agent names arrive as cards with live previews (web pages, documents, code, slides, sheets, PDFs) |
 | Talk to agents on *other* platforms (A2A) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | **P2** (nobody has it) |
 
 ### D. Human ↔ agent collaboration
