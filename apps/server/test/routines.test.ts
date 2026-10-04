@@ -11,6 +11,7 @@ let current: App | null = null;
 let server: FastifyInstance | null = null;
 afterEach(async () => {
   await server?.close();
+  current?.cron.stop();
   await current?.runtime.stop();
   current = server = null;
 });
@@ -117,5 +118,133 @@ describe('channel lead', () => {
     expect(app.store.listRuns({ agentId: lead.id })).toHaveLength(1);
     expect(app.store.listRuns({ agentId: writer.id })).toHaveLength(1);
     expect(messagesIn(app, general(app).id).map((m) => m.text)).toContain('On it.');
+  });
+});
+
+describe('routines agents set up', () => {
+  const allow = say('{"verdict":"allow","reason":"The owner asked for this"}');
+
+  it('sets up a teammate routine from a person\'s request, reporting in their chat with that teammate', async () => {
+    const { app, models, owner } = await setup();
+    const manager = addAgent(app, 'Manager');
+    const bob = addAgent(app, 'Bob');
+    models.script('test/manager', [callTool('create_routine', { agent: 'Bob', name: 'Hourly joke', cron: '0 * * * *', prompt: 'Tell Owner a short joke.' }), say('Bob will tell you a joke every hour.')]);
+    models.script('test/reviewer', [allow]);
+    models.script('test/bob', [say('Why did the bicycle fall over? It was two tired.')]);
+
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, manager.id).id, authorId: owner.id, text: 'Have Bob tell me a joke every hour' });
+    await app.runtime.idle();
+
+    const withBob = app.store.findDm(owner.id, bob.id)!;
+    const [routine] = app.store.listSchedules();
+    expect(routine).toMatchObject({ agentId: bob.id, name: 'Hourly joke', cron: '0 * * * *', trigger: 'schedule', enabled: true, channelId: withBob.id, prompt: 'Tell Owner a short joke.' });
+    expect(models.requests.filter((r) => r.model === 'test/reviewer')).toHaveLength(1); // the default policy reviews new routines
+    const [result] = toolResults(app, manager.id);
+    expect(result).toContain(`Set up routine "Hourly joke" [${routine.id}]`);
+    expect(result).toContain('Bob runs it on "0 * * * *" (UTC), next at ');
+    expect(result).toContain('reports in DM with');
+    expect(app.store.listEvents({ types: ['schedule.created'] })[0]).toMatchObject({ actorId: manager.id, agentId: bob.id });
+    expect(app.cron.withNextRun(routine).nextRunAt).not.toBeNull();
+
+    app.cron.fire(routine.id);
+    await app.runtime.idle();
+    expect(messagesIn(app, withBob.id).at(-1)).toMatchObject({ authorId: bob.id, text: 'Why did the bicycle fall over? It was two tired.' });
+  });
+
+  it('refuses routines that run too often, are not cron, or come from a routine, before anyone reviews them', async () => {
+    const { app, models, owner } = await setup();
+    const manager = addAgent(app, 'Manager');
+    models.script('test/manager', [
+      callTool('create_routine', { name: 'Ping', cron: '*/5 * * * *', prompt: 'Say hi.' }),
+      callTool('create_routine', { name: 'Ping', cron: 'every hour', prompt: 'Say hi.' }),
+      callTool('create_routine', { name: 'Ping', cron: '0 0 * * * *', prompt: 'Say hi.' }),
+      callTool('create_routine', { agent: owner.name, name: 'Ping', cron: '0 * * * *', prompt: 'Say hi.' }),
+      say('I could not set that up.'),
+    ]);
+
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, manager.id).id, authorId: owner.id, text: 'Ping me now and then' });
+    await app.runtime.idle();
+
+    const [tooOften, notCron, sixFields, person] = toolResults(app, manager.id);
+    expect(tooOften).toBe('Error: Routines you set up can run at most every 15 minutes. For more often, ask a person to set it up in the routine editor.');
+    expect(notCron).toContain('Error: Invalid cron expression "every hour"');
+    expect(sixFields).toBe('Error: Use a 5-field cron expression (minute hour day month weekday), in UTC.');
+    expect(person).toBe(`Error: ${owner.name} is a person; routines are run by agents.`);
+    expect(models.requests.some((r) => r.model === 'test/reviewer')).toBe(false);
+
+    // A routine's own run can't add more routines.
+    const nightly = app.store.createSchedule({ agentId: manager.id, name: 'Nightly', cron: '0 2 * * *', prompt: 'Check the inbox.', channelId: null, enabled: true });
+    models.script('test/manager', [callTool('create_routine', { name: 'More', cron: '0 * * * *', prompt: 'Say hi.' }), callTool('resume_routine', { routine: 'Nightly' }), say('[silent]')]);
+    app.cron.fire(nightly.id);
+    await app.runtime.idle();
+    const [more, resume] = toolResults(app, manager.id);
+    expect(more).toBe("Error: A routine can't set up more routines. Say in your reply what you would schedule, and let a person decide.");
+    expect(resume).toBe("Error: A routine can't resume routines. Say in your reply what you would resume, and let a person decide.");
+    expect(app.store.listSchedules()).toHaveLength(1);
+  });
+
+  it('lists routines, and stops them: removes those agents set up, turns off those a person made', async () => {
+    const { app, models, owner, server } = await setup();
+    const manager = addAgent(app, 'Manager');
+    const bob = addAgent(app, 'Bob');
+    const post = (payload: Record<string, unknown>) => server.inject({ method: 'POST', url: '/api/schedules', payload }).then((r) => r.json());
+    const report = await post({ agentId: manager.id, name: 'Daily report', cron: '0 9 * * *', prompt: 'Summarise yesterday.' });
+    const nightly = await post({ agentId: bob.id, name: 'Bob nightly', cron: '0 1 * * *', prompt: 'Tidy up.' });
+    models.script('test/reviewer', [allow]);
+    models.script('test/manager', [
+      callTool('create_routine', { agent: 'Bob', name: 'Hourly joke', cron: '0 * * * *', prompt: 'Tell Owner a joke.' }),
+      callTool('list_routines', {}),
+      callTool('stop_routine', { routine: 'hourly joke' }),
+      callTool('stop_routine', { routine: report.id }),
+      callTool('stop_routine', { routine: 'Bob nightly' }),
+      callTool('stop_routine', { routine: 'Weekly' }),
+      say('Done.'),
+    ]);
+
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, manager.id).id, authorId: owner.id, text: 'Sort out the routines' });
+    await app.runtime.idle();
+
+    const [, list, joke, daily, bobs, missing] = toolResults(app, manager.id);
+    expect(list).toContain(`- "Daily report" [${report.id}]: you run it on "0 9 * * *" (UTC), next at `);
+    expect(list).toContain(`- "Bob nightly" [${nightly.id}]: Bob runs it on "0 1 * * *" (UTC)`);
+    expect(list).toContain('- "Hourly joke" [');
+    expect(list).toContain('Does: Tell Owner a joke.');
+    expect(joke).toBe('Removed routine "Hourly joke" (Bob). It won\'t run again.');
+    expect(daily).toBe('Paused routine "Daily report" (Manager). A person set it up, so it stays under Manager\'s profile → Routines, where they can resume or delete it.');
+    expect(bobs).toBe('Error: You can only stop routines you run or set up yourself. Ask a person, or the agent that runs "Bob nightly".');
+    expect(missing).toBe('Error: No routine "Weekly". Use list_routines to see them.');
+    expect(app.store.listSchedules().map((s) => [s.name, s.enabled])).toEqual([
+      ['Daily report', false],
+      ['Bob nightly', true],
+    ]);
+  });
+
+  it('pauses a routine for a break and resumes it, keeping it in between', async () => {
+    const { app, models, owner } = await setup();
+    const manager = addAgent(app, 'Manager');
+    addAgent(app, 'Bob');
+    models.script('test/reviewer', [allow]);
+    models.script('test/manager', [
+      callTool('create_routine', { agent: 'Bob', name: 'Hourly joke', cron: '0 * * * *', prompt: 'Tell Owner a joke.' }),
+      callTool('stop_routine', { routine: 'Hourly joke', pause: true }),
+      callTool('stop_routine', { routine: 'Hourly joke', pause: true }),
+      callTool('list_routines', { agent: 'Bob' }),
+      callTool('resume_routine', { routine: 'Hourly joke' }),
+      callTool('resume_routine', { routine: 'Hourly joke' }),
+      say('Done.'),
+    ]);
+
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, manager.id).id, authorId: owner.id, text: 'Pause the jokes for now, then bring them back' });
+    await app.runtime.idle();
+
+    const [, paused, again, list, resumed, running] = toolResults(app, manager.id);
+    expect(paused).toBe(`Paused routine "Hourly joke" (Bob). It stays under Bob's profile → Routines; resume it with resume_routine.`);
+    expect(again).toBe('"Hourly joke" (Bob) is already paused.');
+    expect(list).toContain('Bob runs it on "0 * * * *" (UTC), paused;');
+    expect(resumed).toMatch(/^Resumed routine "Hourly joke" \(Bob\):\n- "Hourly joke" \[[^\]]+\]: Bob runs it on "0 \* \* \* \*" \(UTC\), next at /);
+    expect(running).toBe(`"Hourly joke" (Bob) isn't paused.`);
+    const [routine] = app.store.listSchedules();
+    expect(routine.enabled).toBe(true);
+    expect(app.cron.withNextRun(routine).nextRunAt).not.toBeNull();
   });
 });
