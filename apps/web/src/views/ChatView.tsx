@@ -64,6 +64,7 @@ export function AgentChat({ id }: { id: string }) {
           <Conversation
             channelId={dm.id}
             partnerId={agent.id}
+            openNewFiles
             placeholder={`Message ${agent.name}`}
             empty={
               <div className="hero">
@@ -120,6 +121,7 @@ export function ChannelChat({ id }: { id: string }) {
         <Conversation
           channelId={channel.id}
           partnerId={partner}
+          openNewFiles
           placeholder={channel.kind === 'channel' ? `Message ${title} — @mention an agent to put it to work` : `Message ${title}`}
           readOnly={
             between && members.length ? (

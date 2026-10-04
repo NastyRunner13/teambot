@@ -18,6 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
+# Making documents: Word (python-docx, pandoc), Excel (openpyxl, xlsxwriter, pandas), PowerPoint (python-pptx), PDF
+# (reportlab, pypdf) and charts (matplotlib). The Python libraries come from pip as self-contained wheels: Debian's
+# pandas alone pulls in scipy, sympy and a C++ toolchain (~1 GB). They add ~450 MB; build with
+# --build-arg DOCUMENT_TOOLS=0 to leave them out.
+ARG DOCUMENT_TOOLS=1
+RUN if [ "$DOCUMENT_TOOLS" = 1 ]; then \
+      apt-get update && apt-get install -y --no-install-recommends pandoc && rm -rf /var/lib/apt/lists/* \
+      && pip install --no-cache-dir --break-system-packages \
+        python-docx openpyxl xlsxwriter python-pptx reportlab pypdf matplotlib pandas markdown; \
+    fi
+
 # Coding agents an agent can hand programming work to (run_coding_agent). Each needs its own API key,
 # stored as a TeamBot secret (ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY). They add ~750 MB;
 # build with --build-arg CODING_AGENTS= to leave them out, or list only the ones you want.

@@ -30,6 +30,34 @@ const MAX_TOOL_OUTPUT = 16_000;
 export const EMPTY_REPLY_NUDGE =
   '[system] Your last turn ended without any text, so nothing was posted. Write your reply now. If there is really nothing to say, reply with exactly [silent].';
 
+/** Sent when a reply came through garbled, so the person gets a readable answer instead of nothing. */
+export const GARBLED_REPLY_NUDGE =
+  '[system] Your last reply came through garbled (it contained null bytes), so nothing was posted. Write your reply again in plain text.';
+
+const NUL = '\u0000';
+const hasNul = (value: unknown): boolean =>
+  typeof value === 'string'
+    ? value.includes(NUL)
+    : Array.isArray(value)
+      ? value.some(hasNul)
+      : !!value && typeof value === 'object' && Object.values(value).some(hasNul);
+
+/** Whether tool arguments hold a null byte, in the raw text or in a value once parsed (`"\u0000"` in the JSON). */
+function argumentsHaveNul(raw: string): boolean {
+  if (raw.includes(NUL)) return true;
+  try {
+    return hasNul(JSON.parse(raw));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Null bytes never belong in what a model writes: they mean its output broke down (seen with a model that leaked its
+ * own tool-call markup, with null bytes where words should be, into replies, commands and files).
+ */
+export const garbled = (msg: AssistantMessage) => !!msg.content?.includes(NUL) || !!msg.tool_calls?.some((c) => argumentsHaveNul(c.function.arguments ?? ''));
+
 /** Starts the turn after an agent answered teammates: its reply is a note for the person the work was for. */
 const HEADS_UP = '[system] Your answer went back to ';
 const names = (list: string[]) => (list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list.at(-1)}` : list[0]);
@@ -406,12 +434,17 @@ Don't run it again just to see the result; check the current state instead.`
         signal,
       });
       const msg = res.message;
+      if (res.finishReason === 'length') msg.cutOff = true;
+      const previous = transcript.findLast((m) => m.role === 'assistant');
       uniquifyIds(transcript, msg);
       transcript.push(msg);
       // A turn with no text and no tool calls would end the run with nothing posted: ask once more for the reply.
       const empty = !msg.tool_calls?.length && !msg.content?.trim();
       const askAgain = empty && !forPerson && transcript.at(-2)?.content !== EMPTY_REPLY_NUDGE;
       if (askAgain) transcript.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
+      // A garbled reply is never posted; its garbled tool calls are refused when they come up (handleCall).
+      const broken = garbled(msg);
+      if (broken && !msg.tool_calls?.length && !forPerson) transcript.push({ role: 'user', content: GARBLED_REPLY_NUDGE });
       store.setTranscript(runId, transcript);
       run = store.updateRun(runId, {
         steps: run.steps + 1,
@@ -427,9 +460,16 @@ Don't run it again just to see the result; check the current state instead.`
         toolCalls: msg.tool_calls?.map((c) => c.function.name) ?? [],
         text: (msg.content ?? '').slice(0, 2000),
         step: run.steps,
+        ...(msg.cutOff ? { cutOff: true } : {}),
       });
+      // Twice in a row is a model that has broken down: more steps would only spend money and damage files.
+      if (broken && previous?.role === 'assistant' && garbled(previous)) {
+        throw new Error(
+          `${agent.model} sent garbled output twice in a row (null bytes where text should be), so I stopped. Pick another model for ${agent.name} under Customize, then ask again.`,
+        );
+      }
 
-      if (!msg.tool_calls?.length) {
+      if (!msg.tool_calls?.length && !broken) {
         const text = (msg.content ?? '').trim();
         const reply = !!text && !/^\[silent\]$/i.test(text);
         if (forPerson) {
@@ -468,11 +508,22 @@ Don't run it again just to see the result; check the current state instead.`
       return result(`Blocked: this is a read-only routine, so ${tool.name} is not available. Report what you found instead.`);
     }
 
+    const rawArgs = call.function.arguments ?? '';
+    // Garbled arguments would write null bytes into files and commands: refuse them before anything runs.
+    if (argumentsHaveNul(rawArgs)) {
+      return result(`Error: the arguments for ${tool.name} contain null bytes, so your output came through garbled. Nothing was done. Write the call again in plain text.`);
+    }
     let args: Record<string, unknown>;
     try {
-      const raw = call.function.arguments?.trim() ? JSON.parse(call.function.arguments) : {};
+      const raw = rawArgs.trim() ? JSON.parse(rawArgs) : {};
       args = tool.schema.parse(raw) as Record<string, unknown>;
     } catch (err) {
+      const asked = transcript.find((m) => m.role === 'assistant' && m.tool_calls?.some((c) => c.id === call.id));
+      if (asked?.role === 'assistant' && asked.cutOff) {
+        return result(
+          `Error: your reply hit the model's output limit before the arguments for ${tool.name} were complete, so nothing was done. Send less in one call: write a long file in parts, the first with write_file and the rest with append: true.`,
+        );
+      }
       const detail = err instanceof SyntaxError ? 'arguments are not valid JSON' : errorMessage(err);
       return result(`Error: invalid arguments for ${tool.name}: ${truncate(detail, 1000)}`);
     }

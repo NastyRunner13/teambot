@@ -1,20 +1,23 @@
 // The right panel beside a conversation: the agent's (or group's) profile with Details, Library and Computer,
-// and the pages it opens — a routine, its editor, memory, customize, a thread or a run's full log.
-import { Brain, ChevronLeft, ChevronRight, FileImage, FileText, Pause, PanelRightClose, Play, SlidersHorizontal, Trash2, UserPlus } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+// and the pages it opens — a routine, its editor, memory, customize, a thread, a run's full log or a file (wider, and
+// resizable).
+import { Brain, ChevronLeft, ChevronRight, Pause, PanelRightClose, Play, SlidersHorizontal, Trash2, UserPlus } from 'lucide-react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useLocation } from 'wouter';
 import { useShallow } from 'zustand/react/shallow';
 import type { Agent, Channel, LibraryItem, Run } from '@teambot/shared';
 import { api } from '../../api';
+import { fileType } from '../../lib/files';
 import { ago } from '../../lib/format';
 import { activeRunFor, channelTitle, useStore, type PanelTab, type PanelView } from '../../store';
 import { Avatar, GroupAvatar, StatusBadge } from '../Avatar';
 import { BlockedSites } from '../BlockedSites';
-import { IMAGE } from '../FilePreview';
+import { FileTypeIcon } from '../FileView';
 import { Screen } from '../Screen';
 import { SetupStatus } from '../SetupStatus';
 import { SnapshotList } from '../SnapshotList';
 import { CustomizePage, MemoryPage, RunPage } from './AgentPages';
+import { FilePanel } from './FilePanel';
 import { RoutineDetail, RoutineEditor, RoutineList } from './Routines';
 import { ThreadView } from './ThreadView';
 
@@ -22,12 +25,15 @@ import { ThreadView } from './ThreadView';
 export function Panel({ agentId, channelId }: { agentId?: string; channelId?: string }) {
   const panel = useStore((s) => s.panel);
   const [path] = useLocation();
+  const [fileWidth, setFileWidth] = useFileWidth();
   if (!panel.open) return null;
   const here = panel.at === path;
   const view = here ? panel.view : null;
   const picked = here ? panel.agentId : null;
+  const file = view?.kind === 'file';
   return (
-    <aside className="panel" aria-label="Details">
+    <aside className={`panel ${file ? 'wide' : ''}`} aria-label="Details" style={file ? ({ '--file-panel-w': `${fileWidth}px` } as CSSProperties) : undefined}>
+      {file && <ResizeHandle width={fileWidth} onResize={setFileWidth} />}
       {view ? (
         <PanelPageFor key={JSON.stringify(view)} view={view} />
       ) : picked || agentId ? (
@@ -53,7 +59,75 @@ function PanelPageFor({ view }: { view: PanelView }) {
       return <MemoryPage agentId={view.agentId} />;
     case 'customize':
       return <CustomizePage agentId={view.agentId} />;
+    case 'file':
+      return <FilePanel path={view.path} />;
   }
+}
+
+const FILE_WIDTH_KEY = 'teambot-file-panel-width';
+const MIN_FILE_WIDTH = 360;
+const maxFileWidth = () => Math.max(MIN_FILE_WIDTH, Math.round(window.innerWidth * 0.72));
+const clampWidth = (w: number) => Math.round(Math.min(maxFileWidth(), Math.max(MIN_FILE_WIDTH, w)));
+
+/** How wide a file opens beside the chat: about half the window at first (leaving the chat room), then as you last dragged it. */
+function useFileWidth(): [number, (w: number) => void] {
+  const [width, setWidth] = useState(() => {
+    let saved = NaN;
+    try {
+      saved = Number(localStorage.getItem(FILE_WIDTH_KEY));
+    } catch {
+      /* the default below */
+    }
+    return clampWidth(saved > 0 ? saved : Math.min(900, window.innerWidth * 0.46, window.innerWidth - 760));
+  });
+  const set = (w: number) => {
+    const next = clampWidth(w);
+    setWidth(next);
+    try {
+      localStorage.setItem(FILE_WIDTH_KEY, String(next));
+    } catch {
+      /* not remembered, still works */
+    }
+  };
+  return [width, set];
+}
+
+/** The panel's left edge, dragged (or moved with the arrow keys) to make a file's preview wider or narrower. */
+function ResizeHandle({ width, onResize }: { width: number; onResize: (w: number) => void }) {
+  function start(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    // Frames under the pointer would swallow the moves.
+    document.body.classList.add('resizing');
+    const move = (ev: PointerEvent) => onResize(window.innerWidth - ev.clientX);
+    const end = () => {
+      document.body.classList.remove('resizing');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+  return (
+    <div
+      className="panel-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the preview"
+      aria-valuenow={width}
+      aria-valuemin={MIN_FILE_WIDTH}
+      aria-valuemax={maxFileWidth()}
+      tabIndex={0}
+      onPointerDown={start}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowLeft') onResize(width + 40);
+        else if (e.key === 'ArrowRight') onResize(width - 40);
+      }}
+    />
+  );
 }
 
 /** A line of text you click to change: an agent's role, a channel's topic. */
@@ -296,7 +370,7 @@ function Library({ url, watch, empty }: { url: string; watch: string; empty: str
           <div className="library-list">
             {list.map((f) => (
               <button key={f.path} className="library-row" onClick={() => openFile(f.path)} title={f.path}>
-                <span className="file-icon">{/\.md$/i.test(f.name) ? <span className="md-mark">M↓</span> : IMAGE.test(f.name) ? <FileImage size={16} /> : <FileText size={16} />}</span>
+                <span className="file-icon">{/\.md$/i.test(f.name) ? <span className="md-mark">M↓</span> : <FileTypeIcon type={fileType(f.name)} />}</span>
                 <span className="grow ellipsis">{f.name}</span>
                 <span className="small faint">{ago(f.createdAt)}</span>
               </button>

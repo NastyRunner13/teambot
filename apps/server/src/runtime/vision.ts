@@ -52,7 +52,10 @@ export function toModelMessages(app: App, transcript: TranscriptMessage[]): Chat
   transcript.forEach((m, i) => {
     if (m.role !== 'tool') {
       flush();
-      out.push(m);
+      if (m.role === 'assistant' && 'cutOff' in m) {
+        const { cutOff: _, ...message } = m;
+        out.push(message);
+      } else out.push(m);
       return;
     }
     const { images, ...message } = m;

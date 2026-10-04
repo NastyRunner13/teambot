@@ -26,7 +26,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const [, navigate] = useLocation();
   const agents = useStore((s) => s.agents);
   const humans = useStore((s) => s.humans);
-  const names = new Set([...agents, ...humans].map((m) => m.name.toLowerCase()));
+  const openFile = useStore((s) => s.openFile);
+  const names =new Set([...agents, ...humans].map((m) => m.name.toLowerCase()));
 
   return (
     <div className="md">
@@ -43,9 +44,11 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
                 </span>
               );
             }
+            // A /shared path opens the file's preview: beside the chat, or in a dialog elsewhere.
             if (href?.startsWith('#file:')) {
+              const path = href.slice(6);
               return (
-                <a href={`/files?path=${encodeURIComponent(href.slice(6))}`} onClick={(e) => (e.preventDefault(), navigate(`/files?path=${encodeURIComponent(href.slice(6))}`))}>
+                <a href={`/files?path=${encodeURIComponent(path)}`} onClick={(e) => (e.preventDefault(), openFile(path))}>
                   {children}
                 </a>
               );
