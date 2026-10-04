@@ -7,11 +7,12 @@ import type { Agent, Channel, Human, Message, RunSummary } from '@teambot/shared
 import { api } from '../api';
 import { plainLine } from '../lib/conversations';
 import { ago, dayLabel, timeShort } from '../lib/format';
-import { useMember, useStore } from '../store';
+import { overlayPanel, useMember, useStore } from '../store';
 import { ApprovalCard } from './ApprovalCard';
 import { Attachments } from './Attachments';
 import { Avatar } from './Avatar';
 import { Composer } from './Composer';
+import { IMAGE } from './FilePreview';
 import { Markdown } from './Markdown';
 import { WidgetCard } from './WidgetFrame';
 import { LiveWork, WorkNote } from './WorkLog';
@@ -96,6 +97,32 @@ export function MessageRow({
       )}
     </div>
   );
+}
+
+/**
+ * When an agent's new message here brings files, open the first (images already show in the message) beside the chat,
+ * the way an artifact opens. Not on narrow windows, where the panel would cover the chat, and not over something you
+ * have open in the panel: a thread, a routine, the agent's screen.
+ */
+function useOpenNewFiles(channelId: string, messages: Message[], enabled: boolean) {
+  const openFile = useStore((s) => s.openFile);
+  const seen = useRef<{ channelId: string; last: string } | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const last = messages.at(-1)?.id ?? '';
+    const before = seen.current?.channelId === channelId ? seen.current.last : null;
+    seen.current = { channelId, last };
+    // What was here when the chat opened isn't new.
+    if (before === null || before === last) return;
+    const start = messages.findIndex((m) => m.id === before);
+    const { agents, panel } = useStore.getState();
+    const delivered = messages
+      .slice(start + 1)
+      .findLast((m) => m.attachments.length > 0 && agents.some((a) => a.id === m.authorId));
+    if (!delivered || overlayPanel()) return;
+    if (panel.open && (panel.view ? panel.view.kind !== 'file' : panel.tab === 'computer')) return;
+    openFile((delivered.attachments.find((a) => !IMAGE.test(a.name)) ?? delivered.attachments[0]).path);
+  }, [channelId, messages, enabled, openFile]);
 }
 
 /** For the first message of each finished run that took actions: that run, for its work note. */
@@ -386,6 +413,7 @@ export function Conversation({
   readOnly,
   prefix,
   beforeSend,
+  openNewFiles,
 }: {
   channelId: string;
   placeholder: string;
@@ -398,6 +426,8 @@ export function Conversation({
   prefix?: string;
   /** Runs before a message is sent (e.g. saving the page it is about, so the agent reads the latest). */
   beforeSend?: () => Promise<unknown>;
+  /** Open the files agents deliver here in the panel beside the chat as they arrive. */
+  openNewFiles?: boolean;
 }) {
   const messages = useStore((s) => s.messages[channelId] ?? EMPTY);
   // "Messaged …" notes are for people following their own chats, not for a DM between agents that you only watch.
@@ -420,6 +450,7 @@ export function Conversation({
 
   const here = approvals.filter((a) => a.channelId === channelId || (!!partnerId && !a.channelId && a.agentId === partnerId));
   const live = Object.values(runs).filter((r) => r.channelId === channelId);
+  useOpenNewFiles(channelId, messages, loaded && !!openNewFiles);
 
   async function send(text: string, attachments: string[]) {
     pin();
