@@ -1,9 +1,10 @@
 // Channels and messages: the shared surface that humans and agents both work in.
 // Posting here is also how work gets routed: @mentions and DMs land in an agent's inbox.
-import { ACTIVE_RUN_STATUSES, type Agent, type Channel, type Human, type Initiator, type Member, type Message } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, type Agent, type Channel, type Human, type Initiator, type Member, type Message, type Widget } from '@teambot/shared';
 import type { App } from './app.js';
+import { componentToolName } from './components.js';
 import { attachmentFor, formatBytes } from './shared-files.js';
-import { NAME_RE, parseMentions } from './util.js';
+import { NAME_RE, parseMentions, truncate } from './util.js';
 
 /** Who is acting, and how far this action is from a human request (for the agent loop guard). */
 export interface Actor {
@@ -155,12 +156,14 @@ export class Workspace {
     threadId?: string | null;
     /** Files in /shared to attach, e.g. "/shared/report.pdf". */
     attachments?: string[];
+    /** An interface to draw with the message (generative UI). */
+    widget?: Widget;
   }): Message {
     const channel = this.store.getChannel(input.channelId);
     if (!channel) throw new Error('channel not found');
     const text = input.text.trim();
     const attachments = [...new Set(input.attachments ?? [])].map((p) => attachmentFor(this.app.cfg.sharedDir, p));
-    if (!text && !attachments.length) throw new Error('message is empty');
+    if (!text && !attachments.length && !input.widget) throw new Error('message is empty');
     if (text.length > 20_000) throw new Error('message is too long (max 20,000 characters)');
     if (attachments.length > 20) throw new Error('attach at most 20 files to one message');
 
@@ -190,16 +193,19 @@ export class Workspace {
       mentions: [...new Set(mentionIds)],
       attachments,
       threadId,
+      widget: input.widget ?? null,
     });
     this.app.bus.emit('message.created', { actorId: input.authorId, channelId: channel.id, runId: actor.runId }, { message });
     if (input.route !== false) this.route(message, this.store.getChannel(channel.id)!, fromHuman ? 'human' : actor.initiator, !fromHuman && this.fromReadOnlyRun(actor));
     return message;
   }
 
-  /** How a message reads in an agent's inbox: text plus the attached file paths. */
+  /** How a message reads in an agent's inbox: text, the interface it showed and the attached file paths. */
   messageBody(message: Message): string {
     const files = message.attachments.map((a) => `- ${a.path} (${formatBytes(a.size)})`);
-    return [message.text, files.length ? `Attached files (read them from your computer):\n${files.join('\n')}` : ''].filter(Boolean).join('\n\n');
+    const w = message.widget;
+    const view = w ? `[Showed an interactive view: "${w.title}"${w.component ? ` (${componentToolName(w.component)})` : ''}${Object.keys(w.args).length ? ` with ${truncate(JSON.stringify(w.args), 1500)}` : ''}]` : '';
+    return [message.text, view, files.length ? `Attached files (read them from your computer):\n${files.join('\n')}` : ''].filter(Boolean).join('\n\n');
   }
 
   /** Work that a read-only run hands on stays read-only, so a monitoring routine can't act through a teammate. */

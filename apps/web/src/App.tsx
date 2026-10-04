@@ -106,6 +106,8 @@ export function App() {
           <Route path="/apps/:id">{(p) => <AppsView page={{ kind: 'app', id: p.id }} />}</Route>
           <Route path="/skills">{() => <AppsView page={{ kind: 'skills' }} />}</Route>
           <Route path="/skills/:name">{(p) => <AppsView page={{ kind: 'skills', skill: p.name }} />}</Route>
+          <Route path="/components">{() => <AppsView page={{ kind: 'components' }} />}</Route>
+          <Route path="/components/:name">{(p) => <AppsView page={{ kind: 'components', name: p.name }} />}</Route>
           <Route path="/files">{() => <AppsView page={{ kind: 'files' }} />}</Route>
           <Route path="/pages" component={PagesView} />
           <Route path="/pages/:id">{(p) => <PageView id={p.id} />}</Route>

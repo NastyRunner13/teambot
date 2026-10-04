@@ -793,6 +793,19 @@ fieldset.owner-only { min-width: 0; margin: 0; padding: 0; border: 0; }
 .auth-card .error-text { margin-bottom: 12px; }
 .auth-submit { width: 100%; justify-content: center; margin-top: 4px; }
 
+/* ── generative UI: interfaces agents draw, in sandboxed frames ────────── */
+/* A frame has no width of its own to give the bubble, so the message takes the column's. */
+.msg-line:has(> .bubble.has-widget) { width: 100%; }
+.bubble.has-widget { flex: 1; max-width: 640px; padding: 0; background: none !important; }
+.bubble.has-widget > .md { padding: 2px 4px 10px; }
+.widget-card { width: 100%; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--panel-2); }
+.widget-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 6px 6px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.widget-head strong { font-weight: 600; }
+.widget-frame { display: block; width: 100%; border: 0; background: transparent; }
+.widget-card.large { border: 0; }
+.widget-card.large .widget-frame { min-height: 40vh; }
+.widget-error { padding: 6px 14px 10px; color: var(--danger); font-size: 12px; }
+
 /* ── review before saving: a draft page to approve ──────────────────── */
 .approval.page-review { max-width: 680px; border-color: color-mix(in srgb, var(--info) 40%, var(--border-strong)); }
 .page-review-doc { max-height: 420px; margin: 12px 0 8px; padding: 16px 20px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--panel); }
@@ -846,6 +859,18 @@ fieldset.owner-only { min-width: 0; margin: 0; padding: 0; border: 0; }
 .doc-assistant .messages-inner { padding: 0 14px; }
 .doc-agent-select { flex: 1; height: 36px; padding: 0 12px; border-radius: 999px; }
 .doc-assistant-empty { margin: 24px 6px; text-align: center; line-height: 1.6; }
+
+/* ── components playground ──────────────────────────────────────────── */
+.playground-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.playground-title { width: 100%; margin-bottom: 4px; padding: 0; border: 0; outline: none; background: none; color: var(--text); font-size: 19px; font-weight: 650; }
+.playground-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 16px; }
+.playground-tabs { margin-bottom: 8px; }
+.playground-text { min-height: 360px; white-space: pre; }
+.playground-code .hint { margin: 6px 2px 0; }
+@container (max-width: 980px) {
+  .playground-split { grid-template-columns: minmax(0, 1fr); }
+  .playground-text { min-height: 220px; }
+}
 
 /* ── smaller screens ────────────────────────────────────────────────── */
 @media (max-width: 1100px) {

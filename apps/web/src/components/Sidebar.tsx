@@ -78,7 +78,7 @@ export function Sidebar() {
   const pausedAll = useStore((s) => s.pausedAll);
   const conversations = useConversations();
   const is = (path: string) => location === path || location.startsWith(`${path}/`) || location.startsWith(`${path}?`);
-  const inApps = is('/apps') || is('/skills') || is('/files');
+  const inApps = is('/apps') || is('/skills') || is('/components') || is('/files');
 
   return (
     <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} id="workspace-navigation" aria-label="Workspace">

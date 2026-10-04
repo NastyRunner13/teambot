@@ -40,7 +40,7 @@ export function plainLine(text: string): string {
 export function previewOf(entry: ConversationEntry, meId: string | undefined, nameOf: (id: string) => string): string {
   const m = entry.last;
   if (!m) return entry.agent ? entry.agent.role.split(':')[0] : entry.channel?.topic || '';
-  const body = plainLine(m.text) || (m.attachments.length ? `📎 ${m.attachments.map((a) => a.name).join(', ')}` : '');
+  const body = plainLine(m.text) || (m.widget ? `🖼 ${m.widget.title}` : '') || (m.attachments.length ? `📎 ${m.attachments.map((a) => a.name).join(', ')}` : '');
   if (m.authorId === meId) return `You: ${body}`;
   return entry.channel?.kind === 'channel' ? `${nameOf(m.authorId)}: ${body}` : body;
 }

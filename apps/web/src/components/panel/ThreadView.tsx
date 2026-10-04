@@ -61,7 +61,7 @@ export function ThreadView({ rootId }: { rootId: string }) {
           ))}
         </div>
       </div>
-      <Composer key={rootId} placeholder="Reply in thread — agents in this thread see it" onSend={send} autoFocus />
+      <Composer key={rootId} placeholder="Reply in thread — agents in this thread see it" onSend={send} autoFocus draftKey={rootId} />
     </PanelPage>
   );
 }

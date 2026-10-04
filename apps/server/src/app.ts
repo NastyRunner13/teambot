@@ -25,6 +25,7 @@ import { Store } from './store.js';
 import { Telemetry } from './telemetry.js';
 import { McpManager } from './tools/mcp.js';
 import { Auth } from './auth.js';
+import { ComponentLibrary } from './components.js';
 import { Pages } from './pages.js';
 import { ToolRegistry } from './tools/registry.js';
 import { Vault } from './vault.js';
@@ -56,6 +57,7 @@ export interface App {
   snapshots: Snapshots;
   triggers: Triggers;
   pages: Pages;
+  components: ComponentLibrary;
 }
 
 export interface AppOverrides {
@@ -93,6 +95,7 @@ export function createApp(cfg: Config, overrides: AppOverrides = {}): App {
   } as App;
   app.workspace = new Workspace(app);
   app.pages = new Pages(app);
+  app.components = new ComponentLibrary(app);
   app.budgets = new Budgets(app);
   app.runtime = new Runtime(app);
   app.handoffs = new Handoffs(app);

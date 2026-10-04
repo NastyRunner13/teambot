@@ -17,6 +17,7 @@ import {
   type RunSummary,
   type Schedule,
   type SkillSummary,
+  type UiComponent,
   type WsFrame,
 } from '@teambot/shared';
 import { api, whenSignedOut, wsUrl } from './api';
@@ -81,6 +82,10 @@ interface State {
   toast: { text: string; kind: 'info' | 'error' } | null;
   /** Pages, most recently changed first: loaded when first needed (null until then), then kept live. */
   pages: PageSummary[] | null;
+  /** The component library, loaded when first needed. */
+  components: UiComponent[] | null;
+  /** Text an interface offered for a message box (teambot.reply): for the composer of conversation or thread `key`. */
+  composerDraft: { key: string; text: string; n: number } | null;
 
   init(): Promise<void>;
   refresh(): Promise<void>;
@@ -100,6 +105,8 @@ interface State {
   openFile(path: string | null): void;
   notify(text: string, kind?: 'info' | 'error'): void;
   loadPages(): Promise<void>;
+  loadComponents(): Promise<void>;
+  setComposerDraft(key: string, text: string): void;
 }
 
 const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
@@ -162,6 +169,8 @@ export const useStore = create<State>((set, get) => ({
   preview: null,
   toast: null,
   pages: null,
+  components: null,
+  composerDraft: null,
 
   async init() {
     if (socket) return;
@@ -285,7 +294,14 @@ export const useStore = create<State>((set, get) => ({
     set({ pages });
   },
 
+  async loadComponents() {
+    const components = await api.get<UiComponent[]>('/components');
+    set({ components });
+  },
 
+  setComposerDraft(key, text) {
+    set((s) => ({ composerDraft: { key, text, n: (s.composerDraft?.n ?? 0) + 1 } }));
+  },
 }));
 
 const byNewest = (a: PageSummary, b: PageSummary) => b.updatedAt.localeCompare(a.updatedAt);
@@ -393,6 +409,11 @@ function apply(e: EventRecord) {
     if (e.type === 'human.removed' && d.human) next.humans = s.humans.filter((h) => h.id !== d.human.id);
     if ((e.type === 'page.created' || e.type === 'page.updated') && d.page && s.pages) next.pages = upsert(s.pages, d.page as PageSummary).sort(byNewest);
     if (e.type === 'page.deleted' && s.pages) next.pages = s.pages.filter((p) => p.id !== d.id);
+    if (e.type === 'component.deleted' && s.components) next.components = s.components.filter((c) => c.name !== d.name);
+    else if (e.type.startsWith('component.') && d.component && s.components) {
+      const c = d.component as UiComponent;
+      next.components = [...s.components.filter((x) => x.name !== c.name), c].sort((a, b) => a.title.localeCompare(b.title));
+    }
     if (e.type === 'team.enabled') next.teamMode = true;
     if (e.type === 'team.disabled') next.teamMode = false;
     if (e.type === 'human.updated' && d.human) {

@@ -66,7 +66,9 @@ export function forwardable(app: App, m: Message): { text: string } | null {
   if (!dmWithOwner && !m.mentions.includes(owner.id)) return null;
   const where = dmWithOwner ? (m.threadId ? ' in a thread' : '') : ` in ${app.workspace.channelLabel(channel, owner.id)}${m.threadId ? ' (thread)' : ''}`;
   const files = m.attachments.length ? `\n\n📎 ${m.attachments.map((a) => a.path).join('\n📎 ')}` : '';
-  return { text: `${author.avatar} ${author.name}${where}:\n${m.text}${files}` };
+  // A chat app can't draw it, so say what there is to see.
+  const view = m.widget ? `${m.text ? '\n\n' : ''}🖼 ${m.widget.title} (an interactive view: open TeamBot to see it)` : '';
+  return { text: `${author.avatar} ${author.name}${where}:\n${m.text}${view}${files}` };
 }
 
 export const HELP =

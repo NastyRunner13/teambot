@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { ACTIVE_RUN_STATUSES, MAX_PAGE_CHARS, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
 import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
+import { ComponentError, DraftInput } from './components.js';
 import { PageConflict, PageError } from './pages.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
@@ -168,7 +169,7 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   /** Open without signing in: signing in, joining, and webhooks (which carry their own token). */
   const PUBLIC = [/^\/api\/auth(\/|\?|$)/, /^\/api\/hooks\//];
   /** Workspace settings only an owner may change. */
-  const OWNER_ONLY = /^\/api\/(policy|secrets|connectors|bridges|budget|team)(\/|\?|$)/;
+  const OWNER_ONLY = /^\/api\/(policy|secrets|connectors|bridges|budget|team|components)(\/|\?|$)/;
   const sameSite = (origin: string, host: string | undefined) => {
     try {
       return new URL(origin).host === host || new URL(origin).origin === cfg.publicUrl;
@@ -182,6 +183,9 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     // Agent computers share a Docker network with the server in the Compose setup. Their firewall keeps them off it;
     // this is the second lock: the API acts as the owner when sign-in is off, so it never answers a computer.
     if (computers.isComputerAddress(req.socket.remoteAddress)) return reply.code(403).send({ error: 'Agent computers cannot use the TeamBot API' });
+    // Interfaces agents draw run in sandboxed frames, whose requests say "Origin: null". With sign-in off the API acts as
+    // the owner, so nothing from such a frame may change anything (the frames also forbid network requests).
+    if (req.headers.origin === 'null' && req.method !== 'GET' && req.method !== 'HEAD') return reply.code(403).send({ error: 'Requests from sandboxed frames are refused' });
     if (!app.auth.teamMode) return;
     const token = cookie(req, SESSION_COOKIE);
     const human = app.auth.session(token);
@@ -1000,6 +1004,30 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  // ── components (generative UI) ───────────────────────────────────────
+  // Anyone can look; only an owner saves, publishes, withdraws or deletes (OWNER_ONLY), since publishing hands a
+  // component to every agent.
+  const componentCall = <T>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof ComponentError) throw new HttpError(err.status, err.message);
+      throw err;
+    }
+  };
+  server.get('/api/components', async () => app.components.list());
+  server.put<{ Params: { name: string } }>('/api/components/:name', async (req) => {
+    const input = parse(DraftInput, req.body);
+    return componentCall(() => app.components.saveDraft(req.params.name, input, me(req).id));
+  });
+  server.post<{ Params: { name: string } }>('/api/components/:name/publish', async (req) => componentCall(() => app.components.publish(req.params.name, me(req).id)));
+  server.post<{ Params: { name: string } }>('/api/components/:name/unpublish', async (req) => componentCall(() => app.components.unpublish(req.params.name, me(req).id)));
+  server.delete<{ Params: { name: string } }>('/api/components/:name', async (req) => {
+    componentCall(() => app.components.remove(req.params.name, me(req).id));
+    return { ok: true };
+  });
+
+  // ── memory & search ──────────────────────────────────────────────────
   const MemoryInput = z.object({ content: z.string().max(MAX_MEMORY_BYTES) });
   server.get('/api/memory/team', async () => ({ content: app.memory.read('team') }));
   server.put('/api/memory/team', async (req) => {

@@ -13,6 +13,7 @@ import { Attachments } from './Attachments';
 import { Avatar } from './Avatar';
 import { Composer } from './Composer';
 import { Markdown } from './Markdown';
+import { WidgetCard } from './WidgetFrame';
 import { LiveWork, WorkNote } from './WorkLog';
 
 const EMPTY: Message[] = [];
@@ -63,8 +64,9 @@ export function MessageRow({
       )}
       {note}
       <div className="msg-line">
-        <div className="bubble">
+        <div className={`bubble ${m.widget ? 'has-widget' : ''}`}>
           {m.text && <Markdown text={m.text} />}
+          {m.widget && <WidgetCard widget={m.widget} draftKey={m.threadId ?? m.channelId} />}
           <Attachments items={m.attachments} />
         </div>
         <div className="msg-actions">
@@ -444,7 +446,7 @@ export function Conversation({
           ))}
         </div>
       </div>
-      {readOnly ? <div className="composer read-only">{readOnly}</div> : <Composer key={channelId} placeholder={placeholder} onSend={send} />}
+      {readOnly ? <div className="composer read-only">{readOnly}</div> : <Composer key={channelId} placeholder={placeholder} onSend={send} draftKey={channelId} />}
     </>
   );
 }
