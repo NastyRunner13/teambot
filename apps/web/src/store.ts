@@ -326,6 +326,13 @@ function apply(e: EventRecord) {
         if (list && !list.some((x) => x.id === m.id)) next.messages = { ...s.messages, [m.channelId]: [...list, { ...m, replyCount: 0, lastReplyAt: null }] };
       }
     }
+    // A teammate's answer to a request made from a conversation: that conversation notes it ("Message from …").
+    if (e.type === 'handoff.answered' && d.message && d.handoff?.originChannelId) {
+      const m = d.message as Message;
+      const origin = d.handoff.originChannelId as string;
+      const all = next.sent ?? s.sent;
+      if (all[origin] && !all[origin].some((x) => x.id === m.id)) next.sent = { ...all, [origin]: [...all[origin], m] };
+    }
     if (d.channel) next.channels = upsert(s.channels, d.channel as Channel);
     if (e.type === 'channel.deleted') {
       const gone = d.channelId as string;

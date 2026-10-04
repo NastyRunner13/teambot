@@ -244,6 +244,11 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX handoffs_by_run ON handoffs (run_id);
   CREATE INDEX handoffs_by_target ON handoffs (to_agent_id, channel_id, status);
   `,
+  // 18: the message that answered a request, so the chat that asked can show where the answer came from
+  `
+  ALTER TABLE handoffs ADD COLUMN answer_id TEXT;
+  CREATE INDEX handoffs_by_origin ON handoffs (origin_channel_id);
+  `,
 ];
 
 type Row = Record<string, SQLInputValue>;
@@ -381,6 +386,7 @@ const toHandoff = (r: Row): Handoff => ({
   task: String(r.task),
   status: r.status as HandoffStatus,
   outcome: (r.outcome as string) ?? null,
+  answerId: (r.answer_id as string) ?? null,
   answerDepth: r.answer_depth === null || r.answer_depth === undefined ? null : Number(r.answer_depth),
   delivered: Number(r.delivered) === 1,
   delayNoted: Number(r.delay_noted) === 1,
@@ -756,12 +762,18 @@ export class Store {
     );
     return rows.map(toMessage).reverse();
   }
-  /** What agents posted in other conversations while working in this one (messaging a teammate), oldest first. */
+  /**
+   * What agents posted in other conversations while working in this one (messaging a teammate), and the answers
+   * teammates sent back to requests made from here, oldest first.
+   */
   listSentElsewhere(channelId: string, opts: { limit?: number } = {}): Message[] {
     const rows = this.all(
       `SELECT m.* FROM runs r JOIN messages m ON m.run_id = r.id
        WHERE r.channel_id = :channelId AND m.channel_id != :channelId
-       ORDER BY m.created_at DESC, m.rowid DESC LIMIT :limit`,
+       UNION
+       SELECT m.* FROM handoffs h JOIN messages m ON m.id = h.answer_id
+       WHERE h.origin_channel_id = :channelId AND m.channel_id != :channelId
+       ORDER BY created_at DESC, id DESC LIMIT :limit`,
       { channelId, limit: opts.limit ?? 60 },
     );
     return rows.map(toMessage).reverse();
@@ -888,8 +900,8 @@ export class Store {
   }
 
   // ── handoffs (ask_agent) ──────────────────────────────────────────────
-  createHandoff(input: Omit<Handoff, 'id' | 'status' | 'outcome' | 'answerDepth' | 'delivered' | 'delayNoted' | 'createdAt' | 'settledAt'>): Handoff {
-    const h: Handoff = { ...input, id: newId('hnd'), status: 'open', outcome: null, answerDepth: null, delivered: false, delayNoted: false, createdAt: now(), settledAt: null };
+  createHandoff(input: Omit<Handoff, 'id' | 'status' | 'outcome' | 'answerId' | 'answerDepth' | 'delivered' | 'delayNoted' | 'createdAt' | 'settledAt'>): Handoff {
+    const h: Handoff = { ...input, id: newId('hnd'), status: 'open', outcome: null, answerId: null, answerDepth: null, delivered: false, delayNoted: false, createdAt: now(), settledAt: null };
     this.run(
       `INSERT INTO handoffs (id, run_id, from_agent_id, to_agent_id, channel_id, origin_channel_id, origin_thread_id, depth, initiator, read_only, task, status, created_at)
        VALUES (:id, :runId, :fromAgentId, :toAgentId, :channelId, :originChannelId, :originThreadId, :depth, :initiator, :readOnly, :task, :status, :createdAt)`,
@@ -914,12 +926,13 @@ export class Store {
     if (opts.statuses?.length) where.push(`status IN (${opts.statuses.map((s) => `'${s}'`).join(', ')})`);
     return this.all(`SELECT * FROM handoffs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at, rowid`, params).map(toHandoff);
   }
-  settleHandoff(id: string, status: Exclude<HandoffStatus, 'open'>, outcome: string | null, answerDepth: number | null = null) {
-    this.run('UPDATE handoffs SET status = :status, outcome = :outcome, answer_depth = :answerDepth, settled_at = :at WHERE id = :id', {
+  settleHandoff(id: string, status: Exclude<HandoffStatus, 'open'>, outcome: string | null, answer: { id: string; depth: number } | null = null) {
+    this.run('UPDATE handoffs SET status = :status, outcome = :outcome, answer_id = :answerId, answer_depth = :answerDepth, settled_at = :at WHERE id = :id', {
       id,
       status,
       outcome,
-      answerDepth,
+      answerId: answer?.id,
+      answerDepth: answer?.depth,
       at: now(),
     });
   }

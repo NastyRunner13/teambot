@@ -351,6 +351,16 @@ pre.json { background: var(--panel-2); border: 1px solid var(--border); border-r
 .sent-note { align-self: center; display: inline-flex; align-items: center; gap: 6px; max-width: 85%; margin-top: 14px; padding: 3px 10px; border-radius: 999px; color: var(--muted); font-size: 13px; text-decoration: none; white-space: nowrap; }
 .sent-note strong { overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; }
 .sent-note:hover { background: var(--panel-2); }
+button.sent-note { border: 0; background: none; font: inherit; cursor: pointer; }
+button.sent-note:hover { background: var(--panel-2); }
+.sent-note.sub { margin-top: 2px; }
+.sent-note .flip { transform: rotate(180deg); }
+.avatar-stack { display: inline-flex; align-items: center; }
+.avatar-stack .avatar { border-radius: 50%; box-shadow: 0 0 0 1.5px var(--bg); }
+.avatar-stack .avatar:not(.human) { background: var(--bg); }
+.avatar-stack .avatar + .avatar { margin-left: -5px; }
+.sent-note:hover .avatar-stack .avatar { box-shadow: 0 0 0 1.5px var(--panel-2); }
+.sent-note:hover .avatar-stack .avatar:not(.human) { background: var(--panel-2); }
 .thread-summary { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
 .thread-summary strong { color: var(--text); font-weight: 600; }
 .thread-summary:hover { background: var(--panel-2); }

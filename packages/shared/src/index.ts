@@ -188,6 +188,8 @@ export interface Handoff {
   status: HandoffStatus;
   /** The answer, or why there is none. */
   outcome: string | null;
+  /** The asked agent's message that answered it, in `channelId`. */
+  answerId: string | null;
   /** The answer's depth, so what the asker does next still counts the hops. */
   answerDepth: number | null;
   delivered: boolean;
