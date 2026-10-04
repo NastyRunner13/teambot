@@ -58,16 +58,51 @@ Channels: ${channels.map((c) => `#${c.name}${c.memberIds.includes(agent.id) ? ''
 - To find something from earlier (a decision, a link, a result), use search_history. Old messages can point to files that were deleted since; check a file exists before sending someone to it.
 ${agent.desktop ? '- You also have the whole desktop: computer_screenshot to see the screen, then computer_click/type/key/scroll/drag with pixel coordinates from the latest screenshot. Prefer browser_* tools for web pages (they are faster and more precise); use the desktop for other apps, file dialogs, or pages the browser tools cannot handle.\n' : ''}${coding.length ? `- For substantial programming work, hand the task to a coding agent with run_coding_agent (${coding.join(', ')}). Give it the folder and a precise task, then check its report and the result yourself.\n` : ''}${run.readOnly ? '- This run is READ-ONLY (a monitoring routine): you can look at pages, files and the workspace, but tools that change things are not available. Report what you find; if nothing needs attention, reply [silent].\n' : ''}${skillSection}
 ${app.memory.promptSection(agent)}
-
+${recentWork(app, agent, run)}
 Current time: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
 }
 
-/** Turns inbox items into the user message for the model. The first message of a run also gets recent channel context. */
-export function formatInbox(app: App, agent: Agent, items: InboxItem[], firstInRun: boolean): string {
+const RECENT_JOBS = 5;
+
+/**
+ * The agent's last few jobs in other conversations: where, what it was asked, and how it ended. Without it, "what did
+ * you do last time?" asked anywhere but the chat the work was in sends the agent searching its own history.
+ */
+function recentWork(app: App, agent: Agent, run: Run): string {
+  const ws = app.workspace;
+  const flat = (s: string, n: number) => {
+    const t = s.replace(/\s+/g, ' ').trim();
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  };
+  const jobs: string[] = [];
+  for (const r of app.store.listRuns({ agentId: agent.id, limit: 30 })) {
+    if (jobs.length >= RECENT_JOBS) break;
+    if (r.id === run.id || !r.channelId || r.channelId === run.channelId) continue;
+    const channel = app.store.getChannel(r.channelId);
+    if (!channel || !ws.canSeeFrom(channel, agent.id, run.channelId)) continue;
+    const posted = app.store.listMessagesByRun(r.id);
+    const reply = posted.filter((m) => m.channelId === r.channelId).at(-1);
+    const files = [...new Set(posted.flatMap((m) => m.attachments.map((a) => a.path)))];
+    const ended =
+      r.status === 'failed' ? `failed${r.error ? ` (${flat(r.error, 120)})` : ''}` : r.status === 'cancelled' ? 'a person stopped it' : reply ? `you replied "${flat(reply.text, 280)}"` : 'you posted no reply';
+    jobs.push(`- ${r.createdAt.slice(0, 16).replace('T', ' ')} UTC, ${ws.channelLabel(channel, agent.id)}: "${flat(r.title, 140)}" → ${ended}${files.length ? `; files: ${files.join(', ')}` : ''}`);
+  }
+  if (!jobs.length) return '';
+  return `\n## Your recent work
+Your last jobs in other conversations, newest first. To see more of one, read_channel that conversation.
+${jobs.join('\n')}
+`;
+}
+
+/**
+ * Turns inbox items into the user message for the model. The first message of a run also gets recent channel context,
+ * unless the run carries on from an earlier job's transcript, which already has it.
+ */
+export function formatInbox(app: App, agent: Agent, items: InboxItem[], firstInRun: boolean, withHistory = firstInRun): string {
   const ws = app.workspace;
   const parts: string[] = [];
 
-  if (firstInRun) {
+  if (withHistory) {
     const first = items.find((i) => i.kind === 'message' && i.channelId);
     const channel = first?.channelId ? app.store.getChannel(first.channelId) : undefined;
     if (first && channel) {

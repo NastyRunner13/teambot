@@ -288,6 +288,20 @@ Don't run it again just to see the result; check the current state instead.`
     return channelId === run.channelId && (item.channelId ? item.threadId : null) === run.threadId;
   }
 
+  /**
+   * The agent's previous job in this conversation, with its transcript, when the step limit stopped it before it
+   * finished (a run that completed without a final reply). Failed and cancelled jobs start over.
+   */
+  private cutShort(run: Run): { run: Run; transcript: TranscriptMessage[] } | undefined {
+    const { store } = this.app;
+    const previous = store
+      .listRuns({ agentId: run.agentId, channelId: run.channelId ?? undefined, limit: 20 })
+      .find((r) => r.id !== run.id && r.threadId === run.threadId && r.readOnly === run.readOnly);
+    if (previous?.status !== 'completed') return undefined;
+    const transcript = store.getTranscript<TranscriptMessage>(previous.id);
+    return finished(transcript) ? undefined : { run: previous, transcript };
+  }
+
   private async stopComputerWork(run: Run) {
     try {
       await this.app.computers.cancelWork(run.agentId);
@@ -341,7 +355,11 @@ Don't run it again just to see the result; check the current state instead.`
       const items = store.pendingInbox(agent.id).filter((i) => this.belongsTo(run, i));
       if (items.length) {
         const first = transcript.length === 0;
-        transcript.push({ role: 'user', content: formatInbox(this.app, agent, items, first) });
+        // A message after a job the step limit cut short carries on from everything that job did ("continue").
+        const earlier = first && items.some((i) => i.kind === 'message') ? this.cutShort(run) : undefined;
+        if (earlier) transcript = earlier.transcript;
+        const input = formatInbox(this.app, agent, items, first, first && !earlier);
+        transcript.push({ role: 'user', content: earlier ? `${RESUME_NOTE}\n\n${input}` : input });
         const latest = items[items.length - 1];
         // One transaction: input is never consumed without being in the transcript, or recorded twice.
         run = store.tx(() => {
@@ -353,18 +371,20 @@ Don't run it again just to see the result; check the current state instead.`
           return store.updateRun(runId, {
             depth: Math.max(first ? 0 : run.depth, ...items.map((i) => i.depth)),
             initiator: items.some((i) => i.initiator === 'human') ? 'human' : first ? latest.initiator : run.initiator,
+            ...(earlier ? { progress: earlier.run.progress } : {}),
           });
         });
         bus.emit('run.input', scope, { items: items.length });
+        // Carries the run, so people watching see the checklist it took over.
+        if (earlier) bus.emit('run.continued', scope, { run, from: earlier.run.id });
       }
 
       // 3. Finished when the last word is the agent's, with no tool calls.
-      const last = transcript.at(-1);
-      if (!last || (last.role === 'assistant' && !last.tool_calls?.length)) return 'completed';
+      if (finished(transcript)) return 'completed';
 
       // 4. Step budget.
       if (run.steps >= cfg.maxStepsPerRun) {
-        this.say(run, `I stopped after ${run.steps} steps (the per-run limit). Tell me to continue if you want me to keep going.`, false);
+        this.say(run, `I stopped after ${run.steps} steps (the per-run limit). Tell me to continue and I'll pick up where I left off.`, false);
         return 'completed';
       }
 

@@ -191,4 +191,45 @@ describe('attachments', () => {
     }
     expect(results[0]).toContain('/shared/research/kept.md and');
   });
+
+  it("doesn't call a file gone when a search excerpt cut its path short", async () => {
+    const { app, models, owner } = setup();
+    fs.mkdirSync(path.join(app.cfg.sharedDir, 'research'), { recursive: true });
+    fs.writeFileSync(path.join(app.cfg.sharedDir, 'research/a-rather-long-report-name.md'), '# Report');
+    addAgent(app, 'Writer');
+    // Excerpts end 90 characters after the first match, which here is partway through the path.
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: `The ${'very '.repeat(10)}report is at /shared/research/a-rather-long-report-name.md`, route: false });
+    models.script('test/writer', [callTool('search_history', { query: 'the very' }), say('[silent]')]);
+
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Writer find it' });
+    await app.runtime.idle();
+
+    const result = String(models.requests.at(-1)!.messages.at(-1)!.content);
+    expect(result).toMatch(/\/shared\/research\/a-[^\s]*…/);
+    expect(result).not.toContain('not found');
+  });
+
+  it('reads a DM by the label tools show it under, and says how to name one', async () => {
+    const { app, models, owner } = setup();
+    const lead = addAgent(app, 'Lead');
+    addAgent(app, 'Writer');
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, lead.id).id, authorId: owner.id, text: 'Plan the launch', route: false });
+    models.script('test/writer', [
+      callTool('read_channel', { channel: 'DM with Lead' }),
+      callTool('read_channel', { channel: `DM with Lead, ${owner.name}` }),
+      callTool('read_channel', { channel: 'DM with Nobody' }),
+      callTool('read_channel', { channel: 'launch' }),
+      say('[silent]'),
+    ]);
+
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Writer catch up' });
+    await app.runtime.idle();
+
+    const [own, theirs, nobody, missing] = models.requests.at(-1)!.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+    expect(own).toBe('DM with Lead has no messages yet.');
+    expect(theirs).toMatch(/^Last 1 messages in DM with /);
+    expect(theirs).toContain('Plan the launch');
+    expect(nobody).toBe(`Error: No conversation "DM with Nobody" that you can read. For your DM with someone, use "@Name".`);
+    expect(missing).toBe('Error: No channel "launch". Group chats: #general. For your DM with someone, use "@Name".');
+  });
 });

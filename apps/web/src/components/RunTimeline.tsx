@@ -74,6 +74,7 @@ function build(events: EventRecord[]): Item[] {
 const RUN_TEXT: Record<string, string> = {
   'run.started': 'Started working',
   'run.resumed': 'Resumed',
+  'run.continued': 'Picked up where the last job stopped',
   'run.completed': 'Finished',
   'run.waiting': 'Waiting for a human',
   'run.paused': 'Paused',

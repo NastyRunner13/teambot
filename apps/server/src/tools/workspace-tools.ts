@@ -108,7 +108,7 @@ export function workspaceTools(): ToolDef[] {
 
     defineTool({
       name: 'read_channel',
-      description: 'Read the most recent messages in a channel or DM ("#name" or "@Name").',
+      description: 'Read the most recent messages in a channel or DM: "#name", "@Name" for your DM with someone, or a conversation as search results name it ("DM with Ann").',
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({

@@ -73,7 +73,10 @@ export class Workspace {
     return `DM with ${others.join(', ') || 'yourself'}`;
   }
 
-  /** Accepts "#name", "name", "@Member" (a DM) or a channel id. Other people's private DMs don't resolve. */
+  /**
+   * Accepts "#name", "name", "@Member" (a DM), a DM's label as tools print it ("DM with Ann", "DM with Bo, Ann") or a
+   * channel id. Other people's private DMs don't resolve.
+   */
   resolveChannel(ref: string, actorId: string): Channel {
     const r = ref.trim();
     const byId = this.store.getChannel(r);
@@ -83,13 +86,21 @@ export class Workspace {
       if (!m) throw new Error(`No teammate named ${r}`);
       return this.getOrCreateDm(actorId, m.id);
     }
+    const label = /^DM with (.+)$/i.exec(r);
+    if (label) {
+      const members = label[1].split(',').map((n) => this.findMember(n));
+      const dm =
+        members.length === 1 && members[0] ? this.getOrCreateDm(actorId, members[0].id) : members.length === 2 && members[0] && members[1] ? this.store.findDm(members[0].id, members[1].id) : undefined;
+      if (dm && this.canSee(dm, actorId)) return dm;
+      throw new Error(`No conversation "${ref}" that you can read. For your DM with someone, use "@Name".`);
+    }
     const byName = this.store.getChannelByName(r.replace(/^#/, ''));
     if (byName) return byName;
     const names = this.store
       .listChannels()
       .filter((c) => c.kind === 'channel')
       .map((c) => `#${c.name}`);
-    throw new Error(`No channel "${ref}". Channels: ${names.join(', ')}`);
+    throw new Error(`No channel "${ref}". Group chats: ${names.join(', ') || 'none'}. For your DM with someone, use "@Name".`);
   }
 
   createChannel(input: { name: string; topic?: string; memberIds: string[] }, actorId: string): Channel {

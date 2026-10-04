@@ -128,6 +128,38 @@ describe('ask_agent', () => {
     expect(messagesIn(app, general(app).id).at(-1)?.text).toBe('It is Monday.');
   });
 
+  it('shows agents their recent work, so being asked what they did last needs no digging', async () => {
+    const { app, models, owner } = setup();
+    const lead = addAgent(app, 'Lead');
+    const analyst = addAgent(app, 'Analyst');
+    models.script('test/analyst', [
+      say('Q3 revenue was $5M.'),
+      say('Last time I worked out Q3 revenue: $5M.'),
+      say('Lead asked what I did last; I told it about Q3 revenue.'),
+      say('You are welcome.'),
+    ]);
+    models.script('test/lead', [ask('Analyst', 'What did you work on last time?'), say('Asked Analyst.'), say('Analyst worked out Q3 revenue.')]);
+    const withAnalyst = app.workspace.getOrCreateDm(owner.id, analyst.id);
+
+    app.workspace.postMessage({ channelId: withAnalyst.id, authorId: owner.id, text: 'What was Q3 revenue?' });
+    await app.runtime.idle();
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, lead.id).id, authorId: owner.id, text: 'Ask Analyst what it did last time' });
+    await app.runtime.idle();
+    app.workspace.postMessage({ channelId: withAnalyst.id, authorId: owner.id, text: 'Thanks' });
+    await app.runtime.idle();
+
+    const prompts = models.requests.filter((r) => r.model === 'test/analyst').map((r) => String(r.messages[0].content));
+    expect(prompts).toHaveLength(4);
+    expect(prompts[0]).not.toContain('## Your recent work');
+    expect(prompts[1]).toContain('## Your recent work');
+    expect(prompts[1]).toContain(`UTC, DM with ${owner.name}: "What was Q3 revenue?" → you replied "Q3 revenue was $5M."`);
+    // Work in the conversation it is in already shows there, so only the other one is listed.
+    const recent = prompts[3].slice(prompts[3].indexOf('## Your recent work'));
+    expect(recent).toContain('UTC, DM with Lead: "**Task:** What did you work on last time?');
+    expect(recent).toContain('→ you replied "Last time I worked out Q3 revenue: $5M."');
+    expect(recent).not.toContain('Q3 revenue was $5M.');
+  });
+
   it('waits for every teammate a run asked, then delivers their answers together', async () => {
     const { app, models, owner } = setup();
     const lead = addAgent(app, 'Lead');
