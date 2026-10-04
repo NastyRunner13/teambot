@@ -127,10 +127,91 @@ export interface Message {
   attachments: Attachment[];
   /** Root message of the thread this is a reply in; null for top-level messages. */
   threadId: string | null;
+  /** An interface the agent drew in the conversation (generative UI), shown in a sandboxed frame. */
+  widget?: Widget | null;
   /** Top-level messages only, as returned by the channel listing. */
   replyCount?: number;
   lastReplyAt?: string | null;
 }
+
+/**
+ * Generative UI: an interface an agent shows in a conversation. It is drawn in a sandboxed frame that has no access to
+ * TeamBot (no session, no network), from a copy of the source taken when it was shown, so later edits to a component
+ * don't change old messages.
+ */
+export interface Widget {
+  /** `component`: a published component from the library; `html`: an interface the agent wrote itself. */
+  kind: 'component' | 'html';
+  title: string;
+  /** The component's name and the published revision it was drawn from. */
+  component?: string;
+  revision?: number;
+  html: string;
+  css: string;
+  js: string;
+  /** What the agent passed in; the frame's script reads them as `teambot.args`. */
+  args: Record<string, unknown>;
+}
+
+/** The source of a component: what it draws and the arguments it takes. */
+export interface ComponentSource {
+  /** What agents are told it is for. It becomes the description of its ui_<name> tool. */
+  description: string;
+  html: string;
+  css: string;
+  js: string;
+  /** JSON Schema of an object: the arguments agents pass. */
+  argsSchema: Record<string, unknown>;
+}
+
+/**
+ * A reusable interface for agents, written in the components playground (or drafted by an agent) and usable only once
+ * someone publishes it. A published component is offered to agents as the tool ui_<name>.
+ */
+export interface UiComponent {
+  name: string;
+  title: string;
+  /** The working copy, with the arguments the preview draws it with. */
+  draft: ComponentSource & { sampleArgs: Record<string, unknown> };
+  /** The version agents use, kept when it is withdrawn so it can be published again. */
+  published: (ComponentSource & { revision: number; at: string; by: string }) | null;
+  /** Published and not withdrawn: agents can draw it. */
+  live: boolean;
+  /** The draft differs from the published version. */
+  changed: boolean;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Tools for components are named ui_<name>. */
+export const COMPONENT_TOOL_PREFIX = 'ui_';
+/** Lowercase letters, numbers and underscores, 2 to 40 characters. */
+export const COMPONENT_NAME_RE = /^[a-z0-9][a-z0-9_]{0,38}[a-z0-9]$/;
+
+/**
+ * A document that people and agents edit together (Markdown). Every save raises `revision` by one; a save names the
+ * revision it started from and is refused when the page has moved on since, so nobody overwrites an edit they never saw.
+ */
+export interface PageSummary {
+  id: string;
+  title: string;
+  revision: number;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Length of the content in characters. */
+  size: number;
+}
+
+export interface Page extends PageSummary {
+  content: string;
+}
+
+export const MAX_PAGE_TITLE = 160;
+export const MAX_PAGE_CHARS = 100_000;
 
 export type RunStatus =
   | 'queued'
