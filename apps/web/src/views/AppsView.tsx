@@ -16,6 +16,7 @@ import { TelegramSettings } from '../components/TelegramSettings';
 import { catalogApp, serverHref, stateOf, useBridges, useConnector, useInstalled, type AppState } from '../lib/apps';
 import { CATALOG, CATEGORIES, CHAT_APPS, catalogEntryFor, searchApps, type CatalogApp, type ChatAppId } from '../lib/catalog';
 import { useStore } from '../store';
+import { ComponentsView } from './ComponentsView';
 import { FilesView } from './FilesView';
 import { SkillsView } from './SkillsView';
 
@@ -648,6 +649,7 @@ export type AppsPage =
   | { kind: 'app'; id: string }
   | { kind: 'server'; name: string }
   | { kind: 'skills'; skill?: string }
+  | { kind: 'components'; name?: string }
   | { kind: 'files' };
 
 export function AppsView({ page }: { page: AppsPage }) {
@@ -684,6 +686,12 @@ export function AppsView({ page }: { page: AppsPage }) {
       return (
         <SettingsShell active="skills" fill>
           <SkillsView name={page.skill} />
+        </SettingsShell>
+      );
+    case 'components':
+      return (
+        <SettingsShell active="components" fill>
+          <ComponentsView name={page.name} />
         </SettingsShell>
       );
     case 'files':

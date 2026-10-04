@@ -59,6 +59,8 @@ export interface Config {
   webDist: string;
   /** Answer with a canned echo instead of calling OpenRouter (trying the app without a key or cost). */
   offlineModels: boolean;
+  /** Agents may draw interfaces they write themselves (show_ui). Published components work either way. */
+  generativeUi: boolean;
 }
 
 export function loadConfig(overrides: Partial<Config> = {}): Config {
@@ -98,6 +100,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     publicUrl: (env.TEAMBOT_PUBLIC_URL ?? '').replace(/\/+$/, ''),
     webDist: path.join(ROOT, 'apps', 'web', 'dist'),
     offlineModels: env.TEAMBOT_OFFLINE_MODELS === '1',
+    generativeUi: !/^(0|false|off|no)$/i.test(env.TEAMBOT_GENERATIVE_UI ?? ''),
     ...overrides,
   };
   return cfg;

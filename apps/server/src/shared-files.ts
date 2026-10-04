@@ -93,6 +93,8 @@ const SHARED_REF = /\/shared\/[^\s`'"<>()[\]{}*,;|]+/g;
  */
 export function markMissingFiles(sharedDir: string, text: string): string {
   return text.replace(SHARED_REF, (match) => {
+    // An excerpt cut off mid-path (search results): the whole path isn't there to check.
+    if (match.endsWith('…')) return match;
     const ref = match.replace(/[.:!?]+$/, ''); // sentence punctuation after the path
     let exists = false;
     try {

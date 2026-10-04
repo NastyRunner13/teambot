@@ -1,5 +1,5 @@
 // The conversation list: every agent and group chat, newest first, with your profile and the apps hub below.
-import { BookOpen, FolderOpen, LogOut, Monitor, Moon, PanelLeft, Pause, Play, Plug, Plus, Search, Settings, Sun } from 'lucide-react';
+import { BookOpen, FileText, FolderOpen, LogOut, Monitor, Moon, PanelLeft, Pause, Play, Plug, Plus, Search, Settings, Sun } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { api } from '../api';
 import { previewOf, useConversations } from '../lib/conversations';
@@ -78,7 +78,7 @@ export function Sidebar() {
   const pausedAll = useStore((s) => s.pausedAll);
   const conversations = useConversations();
   const is = (path: string) => location === path || location.startsWith(`${path}/`) || location.startsWith(`${path}?`);
-  const inApps = is('/apps') || is('/skills') || is('/files');
+  const inApps = is('/apps') || is('/skills') || is('/components') || is('/files');
 
   return (
     <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} id="workspace-navigation" aria-label="Workspace">
@@ -87,6 +87,9 @@ export function Sidebar() {
           <PanelLeft size={18} />
         </button>
         <span className="spacer" />
+        <Link href="/pages" className={`icon-btn ${is('/pages') ? 'active' : ''}`} aria-label="Pages" title="Pages">
+          <FileText size={18} />
+        </Link>
         <Link href="/search" className={`icon-btn ${is('/search') ? 'active' : ''}`} aria-label="Search" title="Search">
           <Search size={18} />
         </Link>

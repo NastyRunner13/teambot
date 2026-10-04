@@ -12,10 +12,12 @@ import {
   type Human,
   type McpServerStatus,
   type Message,
+  type PageSummary,
   type Run,
   type RunSummary,
   type Schedule,
   type SkillSummary,
+  type UiComponent,
   type WsFrame,
 } from '@teambot/shared';
 import { api, whenSignedOut, wsUrl } from './api';
@@ -78,6 +80,12 @@ interface State {
   /** A /shared file open in the preview dialog. */
   preview: string | null;
   toast: { text: string; kind: 'info' | 'error' } | null;
+  /** Pages, most recently changed first: loaded when first needed (null until then), then kept live. */
+  pages: PageSummary[] | null;
+  /** The component library, loaded when first needed. */
+  components: UiComponent[] | null;
+  /** Text an interface offered for a message box (teambot.reply): for the composer of conversation or thread `key`. */
+  composerDraft: { key: string; text: string; n: number } | null;
 
   init(): Promise<void>;
   refresh(): Promise<void>;
@@ -96,6 +104,9 @@ interface State {
   toggleSidebar(): void;
   openFile(path: string | null): void;
   notify(text: string, kind?: 'info' | 'error'): void;
+  loadPages(): Promise<void>;
+  loadComponents(): Promise<void>;
+  setComposerDraft(key: string, text: string): void;
 }
 
 const upsert = <T extends { id: string }>(list: T[], item: T): T[] => {
@@ -157,6 +168,9 @@ export const useStore = create<State>((set, get) => ({
   sidebarCollapsed: remembered('teambot-sidebar') === 'collapsed',
   preview: null,
   toast: null,
+  pages: null,
+  components: null,
+  composerDraft: null,
 
   async init() {
     if (socket) return;
@@ -274,7 +288,23 @@ export const useStore = create<State>((set, get) => ({
     set({ toast: { text, kind } });
     toastTimer = setTimeout(() => set({ toast: null }), kind === 'error' ? 6000 : 3500);
   },
+
+  async loadPages() {
+    const pages = await api.get<PageSummary[]>('/pages');
+    set({ pages });
+  },
+
+  async loadComponents() {
+    const components = await api.get<UiComponent[]>('/components');
+    set({ components });
+  },
+
+  setComposerDraft(key, text) {
+    set((s) => ({ composerDraft: { key, text, n: (s.composerDraft?.n ?? 0) + 1 } }));
+  },
 }));
+
+const byNewest = (a: PageSummary, b: PageSummary) => b.updatedAt.localeCompare(a.updatedAt);
 
 function connect() {
   socket = new WebSocket(wsUrl('/ws'));
@@ -326,6 +356,13 @@ function apply(e: EventRecord) {
         if (list && !list.some((x) => x.id === m.id)) next.messages = { ...s.messages, [m.channelId]: [...list, { ...m, replyCount: 0, lastReplyAt: null }] };
       }
     }
+    // A teammate's answer to a request made from a conversation: that conversation notes it ("Message from …").
+    if (e.type === 'handoff.answered' && d.message && d.handoff?.originChannelId) {
+      const m = d.message as Message;
+      const origin = d.handoff.originChannelId as string;
+      const all = next.sent ?? s.sent;
+      if (all[origin] && !all[origin].some((x) => x.id === m.id)) next.sent = { ...all, [origin]: [...all[origin], m] };
+    }
     if (d.channel) next.channels = upsert(s.channels, d.channel as Channel);
     if (e.type === 'channel.deleted') {
       const gone = d.channelId as string;
@@ -370,6 +407,13 @@ function apply(e: EventRecord) {
     if (e.type.startsWith('connector.') && d.servers && s.health) next.health = { ...s.health, mcpServers: d.servers as McpServerStatus[] };
     if (e.type === 'human.joined' && d.human) next.humans = upsert(s.humans, d.human as Human);
     if (e.type === 'human.removed' && d.human) next.humans = s.humans.filter((h) => h.id !== d.human.id);
+    if ((e.type === 'page.created' || e.type === 'page.updated') && d.page && s.pages) next.pages = upsert(s.pages, d.page as PageSummary).sort(byNewest);
+    if (e.type === 'page.deleted' && s.pages) next.pages = s.pages.filter((p) => p.id !== d.id);
+    if (e.type === 'component.deleted' && s.components) next.components = s.components.filter((c) => c.name !== d.name);
+    else if (e.type.startsWith('component.') && d.component && s.components) {
+      const c = d.component as UiComponent;
+      next.components = [...s.components.filter((x) => x.name !== c.name), c].sort((a, b) => a.title.localeCompare(b.title));
+    }
     if (e.type === 'team.enabled') next.teamMode = true;
     if (e.type === 'team.disabled') next.teamMode = false;
     if (e.type === 'human.updated' && d.human) {

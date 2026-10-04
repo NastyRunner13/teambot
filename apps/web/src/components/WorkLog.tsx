@@ -1,54 +1,35 @@
-// What an agent did for its reply, inside the conversation: one live line while it works, then a short note
-// above the reply ("Worked for 2m 14s · 5 steps") that opens to its plan — the checklist it kept with
-// update_progress — or, without one, to the actions that mattered. Every detail is one click away in the panel's
+// What an agent did for its reply, inside the conversation: one live line while it works, with its latest action as a
+// card, then a short note above the reply ("Worked for 2m 14s · 5 steps") that opens to its plan — the checklist it
+// kept with update_progress — and its actions as inline tool cards. Every detail is one click away in the panel's
 // full log.
-import { Ban, Check, ChevronRight, CircleAlert, Hand, Loader2, Monitor, ShieldQuestion, Square, X } from 'lucide-react';
+import { ChevronRight, CircleAlert, Monitor, Square, X, Check, Loader2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { PROGRESS_TOOL, type EventRecord, type ProgressStep, type Run, type RunSummary } from '@teambot/shared';
+import type { EventRecord, ProgressStep, Run, RunSummary } from '@teambot/shared';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Avatar } from './Avatar';
 import { useRunEvents } from './RunTimeline';
+import { ToolCard, ToolCards, toolCalls, type ToolCall } from './ToolCard';
 
-type StepState = 'ok' | 'failed' | 'blocked' | 'asking' | 'running' | 'answered' | 'stopped';
-interface Step {
+interface Outcome {
   key: string;
-  state: StepState;
   text: string;
 }
 
-/** The steps worth showing: actions and how they went, a human's answers, and why a run stopped. */
-function stepsOf(events: EventRecord[]): Step[] {
-  const steps: Step[] = [];
-  const byCall = new Map<string, Step>();
+/** Why a run ended other than by finishing: it failed, ran out of budget, or was stopped. */
+function outcomesOf(events: EventRecord[]): Outcome[] {
+  const out: Outcome[] = [];
   for (const e of events) {
     const d = e.data as Record<string, any>;
-    if (e.type === 'tool.checked') {
-      if (d.tool === PROGRESS_TOOL) continue; // the plan shows as the checklist, not as an action
-      const state: StepState = d.action === 'deny' ? 'blocked' : d.action === 'ask' || d.action === 'handoff' ? 'asking' : 'running';
-      const step: Step = { key: `t${e.id}`, state, text: d.summary };
-      byCall.set(d.toolCallId, step);
-      steps.push(step);
-    } else if (e.type === 'tool.finished') {
-      const step = byCall.get(d.toolCallId);
-      if (step && step.state !== 'blocked') step.state = d.ok ? 'ok' : 'failed';
-    } else if (e.type === 'approval.resolved') {
-      const status = d.approval?.status as string | undefined;
-      const said = status === 'approved' ? 'You approved it' : status === 'denied' ? 'You said no' : status === 'done' ? 'You did the step' : status === 'declined' ? 'You declined the step' : 'The request was withdrawn';
-      steps.push({ key: `a${e.id}`, state: 'answered', text: d.approval?.note ? `${said}: “${d.approval.note}”` : said });
-    } else if (e.type === 'run.failed') {
-      steps.push({ key: `f${e.id}`, state: 'failed', text: d.error ? `Failed: ${d.error}` : 'Failed' });
-    } else if (e.type === 'budget.exceeded') {
-      steps.push({ key: `b${e.id}`, state: 'stopped', text: 'Stopped: its budget is used up' });
-    } else if (e.type === 'run.cancelled') {
-      steps.push({ key: `c${e.id}`, state: 'stopped', text: 'Stopped' });
-    }
+    if (e.type === 'run.failed') out.push({ key: `f${e.id}`, text: d.error ? `Failed: ${d.error}` : 'Failed' });
+    else if (e.type === 'budget.exceeded') out.push({ key: `b${e.id}`, text: 'Stopped: its budget is used up' });
+    else if (e.type === 'run.cancelled') out.push({ key: `c${e.id}`, text: 'Stopped' });
   }
-  return steps;
+  return out;
 }
 
 /** What the agent is doing this moment, in a few words. */
-function nowDoing(run: Run, steps: Step[]): string {
+function nowDoing(run: Run, calls: ToolCall[]): string {
   switch (run.status) {
     case 'waiting_approval':
       return 'Waiting for your approval';
@@ -61,8 +42,8 @@ function nowDoing(run: Run, steps: Step[]): string {
   }
   const planned = run.progress.find((s) => s.status === 'in_progress');
   if (planned) return planned.text;
-  const current = [...steps].reverse().find((s) => s.state === 'running');
-  return current ? current.text : 'Thinking';
+  const current = [...calls].reverse().find((c) => c.state === 'running');
+  return current ? current.summary : 'Thinking';
 }
 
 /** "2 of 5", for a plan in progress. */
@@ -95,34 +76,44 @@ export function duration(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-const ICON: Record<StepState, React.ReactNode> = {
-  ok: <Check size={12} />,
-  failed: <X size={12} />,
-  blocked: <Ban size={12} />,
-  asking: <ShieldQuestion size={12} />,
-  running: <Loader2 size={12} className="spin" />,
-  answered: <Hand size={12} />,
-  stopped: <Square size={10} />,
-};
+/** With a plan in view, the actions behind it fold into one line. */
+function ActionsToggle({ calls, initiallyOpen }: { calls: ToolCall[]; initiallyOpen: boolean }) {
+  const [open, setOpen] = useState(initiallyOpen);
+  return (
+    <div className="actions-toggle">
+      <button type="button" className="link-btn" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <ChevronRight size={12} className={open ? 'rot' : undefined} /> {calls.length} {calls.length === 1 ? 'action' : 'actions'}
+      </button>
+      {open && <ToolCards calls={calls} />}
+    </div>
+  );
+}
 
-function StepList({ steps, runId, progress, live, children }: { steps: Step[] | null; runId: string; progress: ProgressStep[]; live?: boolean; children?: React.ReactNode }) {
+/** The plan, the actions as tool cards, how it ended, and links. `calls` is null while the events load. */
+function WorkDetails({ runId, progress, calls, outcomes, live, children }: { runId: string; progress: ProgressStep[]; calls: ToolCall[] | null; outcomes: Outcome[]; live?: boolean; children?: React.ReactNode }) {
   const openRun = useStore((s) => s.openRun);
   return (
     <div className="work-steps">
-      {progress.length ? (
-        <ProgressList steps={progress} live={live} />
-      ) : steps === null ? (
+      {progress.length > 0 && <ProgressList steps={progress} live={live} />}
+      {calls === null ? (
         <div className="work-step muted">Loading…</div>
-      ) : steps.length === 0 ? (
-        <div className="work-step muted">No actions yet.</div>
+      ) : calls.length ? (
+        progress.length ? (
+          <ActionsToggle calls={calls} initiallyOpen={!!live} />
+        ) : (
+          <ToolCards calls={calls} />
+        )
       ) : (
-        steps.map((s) => (
-          <div key={s.key} className={`work-step ${s.state}`}>
-            <span className="work-step-icon">{ICON[s.state]}</span>
-            <span className="work-step-text">{s.text}</span>
-          </div>
-        ))
+        !progress.length && <div className="work-step muted">No actions yet.</div>
       )}
+      {outcomes.map((o) => (
+        <div key={o.key} className="work-step failed">
+          <span className="work-step-icon">
+            <X size={12} />
+          </span>
+          <span className="work-step-text">{o.text}</span>
+        </div>
+      ))}
       <div className="work-links">
         <button type="button" className="link-btn" onClick={() => openRun(runId)}>
           Full log <ChevronRight size={12} />
@@ -133,12 +124,13 @@ function StepList({ steps, runId, progress, live, children }: { steps: Step[] | 
   );
 }
 
-/** Above an agent's reply: how long it worked, and its plan or (without one) its actions. Actions load when opened. */
+/** Above an agent's reply: how long it worked, and its plan and actions. Actions load when opened. */
 export function WorkNote({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false);
   const plan = run.progress;
-  const events = useRunEvents(open && !plan.length ? run.id : null);
-  const steps = useMemo(() => (open && events.length ? stepsOf(events) : null), [open, events]);
+  const events = useRunEvents(open ? run.id : null);
+  const calls = useMemo(() => (open && events.length ? toolCalls(events) : null), [open, events]);
+  const outcomes = useMemo(() => (open ? outcomesOf(events) : []), [open, events]);
   const took = duration(new Date(run.updatedAt).getTime() - new Date(run.createdAt).getTime());
   const failed = run.status === 'failed' || run.status === 'cancelled';
   const done = plan.filter((s) => s.status === 'done').length;
@@ -152,12 +144,12 @@ export function WorkNote({ run }: { run: RunSummary }) {
           {failed ? 'Stopped after' : 'Worked for'} {took} · {count}
         </span>
       </button>
-      {open && <StepList steps={steps} runId={run.id} progress={plan} />}
+      {open && <WorkDetails runId={run.id} progress={plan} calls={calls} outcomes={outcomes} />}
     </div>
   );
 }
 
-/** At the bottom of a conversation while an agent works on something for it. */
+/** At the bottom of a conversation while an agent works on something for it: what it is doing, and its latest action. */
 export function LiveWork({ run, showName, onOpenThread }: { run: Run; showName: boolean; onOpenThread?: () => void }) {
   const agent = useStore((s) => s.agents.find((a) => a.id === run.agentId));
   const openDock = useStore((s) => s.openDock);
@@ -166,9 +158,11 @@ export function LiveWork({ run, showName, onOpenThread }: { run: Run; showName: 
   const [toggled, setOpen] = useState<boolean | null>(null);
   const open = toggled ?? run.progress.length > 0;
   const events = useRunEvents(run.id);
-  const steps = useMemo(() => stepsOf(events), [events]);
-  const doing = nowDoing(run, steps);
+  const calls = useMemo(() => toolCalls(events), [events]);
+  const outcomes = useMemo(() => outcomesOf(events), [events]);
+  const doing = nowDoing(run, calls);
   const waiting = run.status === 'waiting_approval' || run.status === 'waiting_human';
+  const latest = calls.at(-1);
 
   async function stop() {
     try {
@@ -193,8 +187,13 @@ export function LiveWork({ run, showName, onOpenThread }: { run: Run; showName: 
         </span>
         <ChevronRight size={14} className="chev" />
       </button>
+      {!open && latest && (
+        <div className="live-latest">
+          <ToolCard key={latest.id} call={latest} />
+        </div>
+      )}
       {open && (
-        <StepList steps={steps} runId={run.id} progress={run.progress} live={run.status === 'running'}>
+        <WorkDetails runId={run.id} progress={run.progress} calls={calls} outcomes={outcomes} live={run.status === 'running'}>
           {run.threadId && onOpenThread && (
             <button type="button" className="link-btn" onClick={onOpenThread}>
               Open thread
@@ -206,7 +205,7 @@ export function LiveWork({ run, showName, onOpenThread }: { run: Run; showName: 
           <button type="button" className="link-btn danger" onClick={() => void stop()}>
             <Square size={11} /> Stop
           </button>
-        </StepList>
+        </WorkDetails>
       )}
     </div>
   );

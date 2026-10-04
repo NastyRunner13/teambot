@@ -108,7 +108,7 @@ export function workspaceTools(): ToolDef[] {
 
     defineTool({
       name: 'read_channel',
-      description: 'Read the most recent messages in a channel or DM ("#name" or "@Name").',
+      description: 'Read the most recent messages in a channel or DM: "#name", "@Name" for your DM with someone, or a conversation as search results name it ("DM with Ann").',
       risk: 'internal',
       readOnlyOk: true,
       schema: z.object({
@@ -191,4 +191,6 @@ export function workspaceTools(): ToolDef[] {
 export const FORCED_APPROVAL_TOOLS: Record<string, 'approval' | 'takeover'> = {
   ask_for_approval: 'approval',
   request_human_takeover: 'takeover',
+  // Review before saving: a person approves the draft page (page-tools.ts).
+  propose_page: 'approval',
 };

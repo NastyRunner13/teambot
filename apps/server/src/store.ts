@@ -19,11 +19,15 @@ import {
   type Invite,
   type InboxItem,
   type Message,
+  type Page,
+  type PageSummary,
   type Run,
   type RunStatus,
   type RunSummary,
   type Schedule,
   type Spend,
+  type UiComponent,
+  type Widget,
 } from '@teambot/shared';
 import { newId, now } from './util.js';
 
@@ -244,6 +248,40 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX handoffs_by_run ON handoffs (run_id);
   CREATE INDEX handoffs_by_target ON handoffs (to_agent_id, channel_id, status);
   `,
+  // 18: the message that answered a request, so the chat that asked can show where the answer came from
+  `
+  ALTER TABLE handoffs ADD COLUMN answer_id TEXT;
+  CREATE INDEX handoffs_by_origin ON handoffs (origin_channel_id);
+  `,
+  // 19: pages people and agents edit together (with a revision per save), components agents draw, and the interface
+  // a message shows. A page saved from an approved draft remembers the tool call, so it is never saved twice.
+  `
+  CREATE TABLE pages (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    source_run_id TEXT,
+    source_call_id TEXT
+  );
+  CREATE UNIQUE INDEX pages_by_source ON pages (source_run_id, source_call_id) WHERE source_call_id IS NOT NULL;
+  CREATE TABLE components (
+    name TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    draft TEXT NOT NULL,
+    published TEXT,
+    live INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  ALTER TABLE messages ADD COLUMN widget TEXT;
+  `,
 ];
 
 type Row = Record<string, SQLInputValue>;
@@ -330,8 +368,40 @@ const toMessage = (r: Row): Message => ({
   mentions: json<string[]>(r.mentions, []),
   attachments: json<Message['attachments']>(r.attachments, []),
   threadId: (r.thread_id as string) ?? null,
+  ...(r.widget ? { widget: json<Widget | null>(r.widget, null) } : {}),
   ...(r.reply_count !== undefined && { replyCount: Number(r.reply_count), lastReplyAt: (r.last_reply_at as string) ?? null }),
 });
+
+const toPageSummary = (r: Row): PageSummary => ({
+  id: String(r.id),
+  title: String(r.title),
+  revision: Number(r.revision),
+  createdBy: String(r.created_by),
+  updatedBy: String(r.updated_by),
+  createdAt: String(r.created_at),
+  updatedAt: String(r.updated_at),
+  size: Number(r.size ?? String(r.content ?? '').length),
+});
+const toPage = (r: Row): Page => ({ ...toPageSummary(r), content: String(r.content) });
+
+const toComponent = (r: Row): UiComponent => {
+  const draft = json<UiComponent['draft']>(r.draft, { description: '', html: '', css: '', js: '', argsSchema: { type: 'object', properties: {} }, sampleArgs: {} });
+  const published = json<UiComponent['published']>(r.published, null);
+  const changed =
+    !published || (['description', 'html', 'css', 'js'] as const).some((k) => draft[k] !== published[k]) || JSON.stringify(draft.argsSchema) !== JSON.stringify(published.argsSchema);
+  return {
+    name: String(r.name),
+    title: String(r.title),
+    draft,
+    published,
+    live: Number(r.live) === 1 && !!published,
+    changed,
+    createdBy: String(r.created_by),
+    updatedBy: String(r.updated_by),
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  };
+};
 
 const toRun = (r: Row): Run => ({
   id: String(r.id),
@@ -381,6 +451,7 @@ const toHandoff = (r: Row): Handoff => ({
   task: String(r.task),
   status: r.status as HandoffStatus,
   outcome: (r.outcome as string) ?? null,
+  answerId: (r.answer_id as string) ?? null,
   answerDepth: r.answer_depth === null || r.answer_depth === undefined ? null : Number(r.answer_depth),
   delivered: Number(r.delivered) === 1,
   delayNoted: Number(r.delay_noted) === 1,
@@ -724,10 +795,12 @@ export class Store {
   // ── messages ──────────────────────────────────────────────────────────
   insertMessage(m: Omit<Message, 'id' | 'createdAt' | 'replyCount' | 'lastReplyAt'>): Message {
     const msg: Message = { ...m, id: newId('msg'), createdAt: now() };
+    // Like a loaded message: no widget key unless there is one.
+    if (!msg.widget) delete msg.widget;
     this.run(
-      `INSERT INTO messages (id, channel_id, author_id, text, created_at, run_id, depth, mentions, attachments, thread_id)
-       VALUES (:id, :channelId, :authorId, :text, :createdAt, :runId, :depth, :mentions, :attachments, :threadId)`,
-      msg as unknown as Record<string, unknown>,
+      `INSERT INTO messages (id, channel_id, author_id, text, created_at, run_id, depth, mentions, attachments, thread_id, widget)
+       VALUES (:id, :channelId, :authorId, :text, :createdAt, :runId, :depth, :mentions, :attachments, :threadId, :widget)`,
+      { ...msg, widget: msg.widget ?? null },
     );
     return msg;
   }
@@ -756,12 +829,18 @@ export class Store {
     );
     return rows.map(toMessage).reverse();
   }
-  /** What agents posted in other conversations while working in this one (messaging a teammate), oldest first. */
+  /**
+   * What agents posted in other conversations while working in this one (messaging a teammate), and the answers
+   * teammates sent back to requests made from here, oldest first.
+   */
   listSentElsewhere(channelId: string, opts: { limit?: number } = {}): Message[] {
     const rows = this.all(
       `SELECT m.* FROM runs r JOIN messages m ON m.run_id = r.id
        WHERE r.channel_id = :channelId AND m.channel_id != :channelId
-       ORDER BY m.created_at DESC, m.rowid DESC LIMIT :limit`,
+       UNION
+       SELECT m.* FROM handoffs h JOIN messages m ON m.id = h.answer_id
+       WHERE h.origin_channel_id = :channelId AND m.channel_id != :channelId
+       ORDER BY created_at DESC, id DESC LIMIT :limit`,
       { channelId, limit: opts.limit ?? 60 },
     );
     return rows.map(toMessage).reverse();
@@ -888,8 +967,8 @@ export class Store {
   }
 
   // ── handoffs (ask_agent) ──────────────────────────────────────────────
-  createHandoff(input: Omit<Handoff, 'id' | 'status' | 'outcome' | 'answerDepth' | 'delivered' | 'delayNoted' | 'createdAt' | 'settledAt'>): Handoff {
-    const h: Handoff = { ...input, id: newId('hnd'), status: 'open', outcome: null, answerDepth: null, delivered: false, delayNoted: false, createdAt: now(), settledAt: null };
+  createHandoff(input: Omit<Handoff, 'id' | 'status' | 'outcome' | 'answerId' | 'answerDepth' | 'delivered' | 'delayNoted' | 'createdAt' | 'settledAt'>): Handoff {
+    const h: Handoff = { ...input, id: newId('hnd'), status: 'open', outcome: null, answerId: null, answerDepth: null, delivered: false, delayNoted: false, createdAt: now(), settledAt: null };
     this.run(
       `INSERT INTO handoffs (id, run_id, from_agent_id, to_agent_id, channel_id, origin_channel_id, origin_thread_id, depth, initiator, read_only, task, status, created_at)
        VALUES (:id, :runId, :fromAgentId, :toAgentId, :channelId, :originChannelId, :originThreadId, :depth, :initiator, :readOnly, :task, :status, :createdAt)`,
@@ -914,12 +993,13 @@ export class Store {
     if (opts.statuses?.length) where.push(`status IN (${opts.statuses.map((s) => `'${s}'`).join(', ')})`);
     return this.all(`SELECT * FROM handoffs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at, rowid`, params).map(toHandoff);
   }
-  settleHandoff(id: string, status: Exclude<HandoffStatus, 'open'>, outcome: string | null, answerDepth: number | null = null) {
-    this.run('UPDATE handoffs SET status = :status, outcome = :outcome, answer_depth = :answerDepth, settled_at = :at WHERE id = :id', {
+  settleHandoff(id: string, status: Exclude<HandoffStatus, 'open'>, outcome: string | null, answer: { id: string; depth: number } | null = null) {
+    this.run('UPDATE handoffs SET status = :status, outcome = :outcome, answer_id = :answerId, answer_depth = :answerDepth, settled_at = :at WHERE id = :id', {
       id,
       status,
       outcome,
-      answerDepth,
+      answerId: answer?.id,
+      answerDepth: answer?.depth,
       at: now(),
     });
   }
@@ -936,6 +1016,87 @@ export class Store {
   /** Messages one run posted, oldest first. */
   listMessagesByRun(runId: string): Message[] {
     return this.all('SELECT * FROM messages WHERE run_id = :runId ORDER BY created_at, rowid', { runId }).map(toMessage);
+  }
+
+  // ── pages ─────────────────────────────────────────────────────────────
+  /** Every page, most recently changed first, without content. */
+  listPages(): PageSummary[] {
+    return this.all(
+      `SELECT id, title, revision, created_by, updated_by, created_at, updated_at, length(content) AS size FROM pages ORDER BY updated_at DESC, rowid DESC`,
+    ).map(toPageSummary);
+  }
+  getPage(id: string): Page | undefined {
+    const r = this.get('SELECT * FROM pages WHERE id = :id', { id });
+    return r && toPage(r);
+  }
+  /** Pages whose title or text contains every term (case-insensitive), most recently changed first. */
+  searchPages(terms: string[], limit = 50): PageSummary[] {
+    if (!terms.length) return [];
+    const p: Record<string, unknown> = { limit };
+    terms.forEach((t, i) => (p[`q${i}`] = `%${likeEscape(t)}%`));
+    return this.all(
+      `SELECT id, title, revision, created_by, updated_by, created_at, updated_at, length(content) AS size FROM pages
+       WHERE ${terms.map((_, i) => `(title LIKE :q${i} ESCAPE '\\' OR content LIKE :q${i} ESCAPE '\\')`).join(' AND ')}
+       ORDER BY updated_at DESC LIMIT :limit`,
+      p,
+    ).map(toPageSummary);
+  }
+  /** Pages whose title is this, ignoring case (titles needn't be unique). */
+  findPagesByTitle(title: string): Page[] {
+    return this.all('SELECT * FROM pages WHERE lower(title) = lower(:title) ORDER BY updated_at DESC', { title }).map(toPage);
+  }
+  /** The page an approved draft (a tool call) was already saved as. */
+  pageFromSource(runId: string, callId: string): Page | undefined {
+    const r = this.get('SELECT * FROM pages WHERE source_run_id = :runId AND source_call_id = :callId', { runId, callId });
+    return r && toPage(r);
+  }
+  insertPage(input: { title: string; content: string; by: string; source?: { runId: string; callId: string } }): Page {
+    const t = now();
+    const id = newId('page');
+    this.run(
+      `INSERT INTO pages (id, title, content, revision, created_by, updated_by, created_at, updated_at, source_run_id, source_call_id)
+       VALUES (:id, :title, :content, 1, :by, :by, :t, :t, :runId, :callId)`,
+      { id, title: input.title, content: input.content, by: input.by, t, runId: input.source?.runId, callId: input.source?.callId },
+    );
+    return this.getPage(id)!;
+  }
+  /**
+   * Save a new version, but only over the revision the editor started from. Returns the saved page, or null when the
+   * page has moved on (or is gone): nothing was written.
+   */
+  updatePage(id: string, patch: { title: string; content: string }, expectedRevision: number, by: string): Page | null {
+    const res = this.run(
+      `UPDATE pages SET title = :title, content = :content, revision = revision + 1, updated_by = :by, updated_at = :t
+       WHERE id = :id AND revision = :expectedRevision`,
+      { id, title: patch.title, content: patch.content, by, t: now(), expectedRevision },
+    );
+    return Number(res.changes) ? this.getPage(id)! : null;
+  }
+  deletePage(id: string): boolean {
+    return Number(this.run('DELETE FROM pages WHERE id = :id', { id }).changes) > 0;
+  }
+
+  // ── components (generative UI) ────────────────────────────────────────
+  listComponents(): UiComponent[] {
+    return this.all('SELECT * FROM components ORDER BY title COLLATE NOCASE, name').map(toComponent);
+  }
+  getComponent(name: string): UiComponent | undefined {
+    const r = this.get('SELECT * FROM components WHERE name = :name', { name });
+    return r && toComponent(r);
+  }
+  /** Insert or replace a component's row as given. */
+  putComponent(c: Pick<UiComponent, 'name' | 'title' | 'draft' | 'published' | 'live' | 'createdBy' | 'updatedBy' | 'createdAt' | 'updatedAt'>): UiComponent {
+    this.run(
+      `INSERT INTO components (name, title, draft, published, live, created_by, updated_by, created_at, updated_at)
+       VALUES (:name, :title, :draft, :published, :live, :createdBy, :updatedBy, :createdAt, :updatedAt)
+       ON CONFLICT(name) DO UPDATE SET title = excluded.title, draft = excluded.draft, published = excluded.published, live = excluded.live,
+         updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+      c as unknown as Record<string, unknown>,
+    );
+    return this.getComponent(c.name)!;
+  }
+  deleteComponent(name: string): boolean {
+    return Number(this.run('DELETE FROM components WHERE name = :name', { name }).changes) > 0;
   }
 
   // ── approvals ─────────────────────────────────────────────────────────

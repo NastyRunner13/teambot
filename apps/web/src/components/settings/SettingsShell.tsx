@@ -1,11 +1,11 @@
 // Settings and Connect apps share one frame: the sections listed on the left, the open one on the right, and inside
 // it groups of rows with the label and its explanation on the left and the control on the right.
-import { BookOpen, FolderOpen, KeyRound, Plug, Server, Settings2, ShieldCheck, Store, Users, Wallet } from 'lucide-react';
+import { BookOpen, FolderOpen, KeyRound, LayoutTemplate, Plug, Server, Settings2, ShieldCheck, Store, Users, Wallet } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'wouter';
 import { useStore } from '../../store';
 
-export type Section = 'general' | 'team' | 'spending' | 'secrets' | 'policy' | 'system' | 'apps' | 'installed' | 'skills' | 'files';
+export type Section = 'general' | 'team' | 'spending' | 'secrets' | 'policy' | 'system' | 'apps' | 'installed' | 'skills' | 'components' | 'files';
 
 type Item = { key: Section; href: string; label: string; icon: typeof Plug };
 
@@ -27,6 +27,7 @@ const GROUPS: { label: string; items: Item[] }[] = [
       { key: 'apps', href: '/apps', label: 'Marketplace', icon: Store },
       { key: 'installed', href: '/apps/installed', label: 'Installed', icon: Plug },
       { key: 'skills', href: '/skills', label: 'Skills', icon: BookOpen },
+      { key: 'components', href: '/components', label: 'Components', icon: LayoutTemplate },
       { key: 'files', href: '/files', label: 'Files', icon: FolderOpen },
     ],
   },

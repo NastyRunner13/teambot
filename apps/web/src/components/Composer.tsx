@@ -1,6 +1,6 @@
 // Message box with @mention autocomplete and file attachments. Enter sends, Shift+Enter adds a line.
 import { ArrowUp, LoaderCircle, Paperclip, Plus, X } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { bytes } from '../lib/format';
 import { useStore } from '../store';
@@ -15,10 +15,15 @@ interface Pending {
 
 let pendingKey = 0;
 
-export function Composer({ placeholder, onSend, autoFocus }: { placeholder: string; onSend: (text: string, attachments: string[]) => Promise<void>; autoFocus?: boolean }) {
+/**
+ * `draftKey`: the conversation (channel id) or thread (root id) this box writes in. Text an interface in it offers
+ * (teambot.reply) lands here for the person to read, change and send.
+ */
+export function Composer({ placeholder, onSend, autoFocus, draftKey }: { placeholder: string; onSend: (text: string, attachments: string[]) => Promise<void>; autoFocus?: boolean; draftKey?: string }) {
   const agents = useStore((s) => s.agents);
   const humans = useStore((s) => s.humans);
   const notify = useStore((s) => s.notify);
+  const offered = useStore((s) => (draftKey && s.composerDraft?.key === draftKey ? s.composerDraft : null));
   const [text, setText] = useState('');
   const [files, setFiles] = useState<Pending[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -33,6 +38,21 @@ export function Composer({ placeholder, onSend, autoFocus }: { placeholder: stri
     const q = query.toLowerCase();
     return [...agents, ...humans].filter((m) => m.name.toLowerCase().startsWith(q)).slice(0, 6);
   }, [query, agents, humans]);
+
+  useEffect(() => {
+    if (!offered) return;
+    // Taken once: a box opened later for the same conversation starts empty.
+    useStore.setState({ composerDraft: null });
+    setText(offered.text);
+    const el = ref.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }, [offered]);
 
   const uploading = files.some((f) => !f.path);
   const ready = (text.trim() || files.length > 0) && !uploading && !sending;

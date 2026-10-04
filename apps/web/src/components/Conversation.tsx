@@ -1,9 +1,9 @@
 // A conversation: messages as chat bubbles, a note on what an agent did above each reply, what agents are doing
 // right now, the approvals waiting for you here, and the composer.
-import { Copy, MessageSquareReply } from 'lucide-react';
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { ChevronDown, Copy, MessageSquareReply } from 'lucide-react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
-import type { Message, RunSummary } from '@teambot/shared';
+import type { Agent, Channel, Human, Message, RunSummary } from '@teambot/shared';
 import { api } from '../api';
 import { plainLine } from '../lib/conversations';
 import { ago, dayLabel, timeShort } from '../lib/format';
@@ -13,6 +13,7 @@ import { Attachments } from './Attachments';
 import { Avatar } from './Avatar';
 import { Composer } from './Composer';
 import { Markdown } from './Markdown';
+import { WidgetCard } from './WidgetFrame';
 import { LiveWork, WorkNote } from './WorkLog';
 
 const EMPTY: Message[] = [];
@@ -63,8 +64,9 @@ export function MessageRow({
       )}
       {note}
       <div className="msg-line">
-        <div className="bubble">
+        <div className={`bubble ${m.widget ? 'has-widget' : ''}`}>
           {m.text && <Markdown text={m.text} />}
+          {m.widget && <WidgetCard widget={m.widget} draftKey={m.threadId ?? m.channelId} />}
           <Attachments items={m.attachments} />
         </div>
         <div className="msg-actions">
@@ -117,18 +119,77 @@ function useWorkNotes(messages: Message[]): Map<string, RunSummary> {
   }, [messages, summaries, active]);
 }
 
-/** "Messaged Job Scout": an agent at work here posted in another conversation. Opens that conversation. */
-function SentNote({ m, partnerId }: { m: Message; partnerId?: string }) {
+/**
+ * For the first message here of each run that worked in another conversation (a group chat, or a teammate's request
+ * in a DM between agents): that conversation, for the line above it.
+ */
+function useOrigins(messages: Message[]): Map<string, Channel> {
+  const summaries = useStore((s) => s.runSummaries);
+  const active = useStore((s) => s.runs);
+  const channels = useStore((s) => s.channels);
+  const agents = useStore((s) => s.agents);
+  return useMemo(() => {
+    const isAgent = new Set(agents.map((a) => a.id));
+    const seen = new Set<string>();
+    const origins = new Map<string, Channel>();
+    for (const m of messages) {
+      if (!m.runId || seen.has(m.runId)) continue;
+      seen.add(m.runId);
+      const from = (active[m.runId] ?? summaries[m.runId])?.channelId;
+      const channel = from && from !== m.channelId ? channels.find((c) => c.id === from) : undefined;
+      if (channel && (channel.kind === 'channel' || channel.memberIds.every((id) => isAgent.has(id)))) origins.set(m.id, channel);
+    }
+    return origins;
+  }, [messages, summaries, active, channels, agents]);
+}
+
+/** "Asked by Writer" or "From #launch": where the work behind the message below was done. Opens that conversation. */
+function FromNote({ m, channel }: { m: Message; channel: Channel }) {
+  const by = useMember(channel.kind === 'dm' ? channel.memberIds.find((id) => id !== m.authorId) : undefined);
+  if (channel.kind === 'dm' && !by) return null;
+  return (
+    <Link href={`/c/${channel.id}`} className="sent-note">
+      {channel.kind === 'channel' ? (
+        <>
+          <span>From</span>
+          <strong>#{channel.name}</strong>
+        </>
+      ) : (
+        <>
+          <span>Asked by</span>
+          <Avatar member={by} size={16} />
+          <strong>{by!.name}</strong>
+        </>
+      )}
+    </Link>
+  );
+}
+
+/**
+ * "Messaged Job Scout": an agent at work here posted in another conversation. "Message from Job Scout": a teammate
+ * answered the agent you're chatting with. Opens that conversation. `sub`: one line of an opened SentGroup.
+ */
+function SentNote({ m, partnerId, sub }: { m: Message; partnerId?: string; sub?: boolean }) {
   const channel = useStore((s) => s.channels.find((c) => c.id === m.channelId));
   const me = useStore((s) => s.me);
   const author = useMember(m.authorId);
   const to = useMember(channel?.kind === 'dm' ? channel.memberIds.find((id) => id !== m.authorId) : undefined);
   if (!channel || (channel.kind === 'dm' && !to)) return null;
+  const className = `sent-note${sub ? ' sub' : ''}`;
+  if (partnerId && to?.id === partnerId && author) {
+    return (
+      <Link href={`/c/${channel.id}`} className={className} title={plainLine(m.text)}>
+        <span>Message from</span>
+        <Avatar member={author} size={16} />
+        <strong>{author.name}</strong>
+      </Link>
+    );
+  }
   // In a chat with one agent it's that agent who did it; anywhere else, say who.
   const who = m.authorId === partnerId ? null : author;
   const verb = channel.kind === 'dm' ? 'messaged' : 'posted in';
   return (
-    <Link href={`/c/${channel.id}`} className="sent-note" title={plainLine(m.text)}>
+    <Link href={`/c/${channel.id}`} className={className} title={plainLine(m.text)}>
       {who && (
         <>
           <Avatar member={who} size={16} />
@@ -151,22 +212,84 @@ function SentNote({ m, partnerId }: { m: Message; partnerId?: string }) {
   );
 }
 
-type Entry = { kind: 'message' | 'sent'; m: Message };
+/**
+ * One agent messaging several teammates between two messages: one line, "Messaged [blobs] 3 agents", that opens to a
+ * line for each. `notes`: one message per conversation.
+ */
+function SentGroup({ notes, partnerId }: { notes: Message[]; partnerId?: string }) {
+  const [open, setOpen] = useState(false);
+  const channels = useStore((s) => s.channels);
+  const agents = useStore((s) => s.agents);
+  const humans = useStore((s) => s.humans);
+  const members = notes
+    .map((m) => channels.find((c) => c.id === m.channelId)?.memberIds.find((id) => id !== m.authorId))
+    .map((id) => agents.find((a) => a.id === id) ?? humans.find((h) => h.id === id))
+    .filter((x): x is Agent | Human => !!x);
+  // In a chat with one agent it's that agent who did it; anywhere else, say who.
+  const who = notes[0].authorId === partnerId ? undefined : agents.find((a) => a.id === notes[0].authorId);
+  return (
+    <>
+      <button type="button" className="sent-note" aria-expanded={open} onClick={() => setOpen(!open)} title={members.map((x) => x.name).join(', ')}>
+        {who && (
+          <>
+            <Avatar member={who} size={16} />
+            <strong>{who.name}</strong>
+          </>
+        )}
+        <span>{who ? 'messaged' : 'Messaged'}</span>
+        <span className="avatar-stack">
+          {members.slice(0, 3).map((x) => (
+            <Avatar key={x.id} member={x} size={16} />
+          ))}
+        </span>
+        <strong>
+          {members.length} {members.every((x) => x.kind === 'agent') ? 'agents' : 'teammates'}
+        </strong>
+        <ChevronDown size={14} className={open ? 'flip' : undefined} aria-hidden />
+      </button>
+      {open && notes.map((m) => <SentNote key={m.id} m={m} partnerId={partnerId} sub />)}
+    </>
+  );
+}
 
-/** Messages with what was sent elsewhere in between, in time order: one note for several posts in a row to one place. */
-function timeline(messages: Message[], sent: Message[]): Entry[] {
+type SentEntry = { kind: 'sent'; m: Message; group: string | null; notes: Message[] };
+type Entry = { kind: 'message'; m: Message } | SentEntry;
+
+/**
+ * Which notes between two messages share one line: messages one author sent to several DMs (its author). Answers to the
+ * agent you're chatting with come back one at a time, so each keeps its own "Message from" line, and posts in group
+ * chats only share a line with more posts to the same place (null).
+ */
+function groupOf(m: Message, channels: Channel[], partnerId?: string): string | null {
+  const channel = channels.find((c) => c.id === m.channelId);
+  if (channel?.kind !== 'dm' || (partnerId && channel.memberIds.includes(partnerId) && m.authorId !== partnerId)) return null;
+  return m.authorId;
+}
+
+/**
+ * Messages with what was sent elsewhere in between, in time order. Between two messages, notes share a line where they
+ * can, even when requests and answers crossed (a quick teammate answering before the last one was asked).
+ */
+function timeline(messages: Message[], sent: Message[], channels: Channel[], partnerId?: string): Entry[] {
   // Older notes would pile up above the first loaded message.
   const since = messages[0]?.createdAt ?? '';
   const notes = sent.filter((m) => m.createdAt >= since && !isSystem(m.text));
   const out: Entry[] = [];
+  let between = 0; // where the notes since the last message start
   const add = (m: Message) => {
-    const prev = out.at(-1);
-    if (prev?.kind !== 'sent' || prev.m.channelId !== m.channelId || prev.m.authorId !== m.authorId) out.push({ kind: 'sent', m });
+    const group = groupOf(m, channels, partnerId);
+    const line = out
+      .slice(between)
+      .find((e): e is SentEntry => e.kind === 'sent' && (group ? e.group === group : !e.group && e.m.channelId === m.channelId && e.m.authorId === m.authorId));
+    if (!line) out.push({ kind: 'sent', m, group, notes: [m] });
+    // One line per conversation: several posts to the same place count once.
+    else if (!line.notes.some((n) => n.channelId === m.channelId)) line.notes.push(m);
   };
   let j = 0;
   for (const m of messages) {
     while (j < notes.length && notes[j].createdAt < m.createdAt) add(notes[j++]);
     out.push({ kind: 'message', m });
+    between = out.length;
   }
   while (j < notes.length) add(notes[j++]);
   return out;
@@ -178,8 +301,10 @@ function timeline(messages: Message[], sent: Message[]): Entry[] {
  */
 export function MessageList({ messages, sent = EMPTY, partnerId, onReply }: { messages: Message[]; sent?: Message[]; partnerId?: string; onReply?: (m: Message) => void }) {
   const me = useStore((s) => s.me);
+  const channels = useStore((s) => s.channels);
   const notes = useWorkNotes(messages);
-  const entries = useMemo(() => timeline(messages, sent), [messages, sent]);
+  const origins = useOrigins(messages);
+  const entries = useMemo(() => timeline(messages, sent, channels, partnerId), [messages, sent, channels, partnerId]);
   return (
     <>
       {entries.map((entry, i) => {
@@ -191,13 +316,15 @@ export function MessageList({ messages, sent = EMPTY, partnerId, onReply }: { me
           return (
             <Fragment key={`sent-${m.id}`}>
               {divider}
-              <SentNote m={m} partnerId={partnerId} />
+              {entry.notes.length > 1 ? <SentGroup notes={entry.notes} partnerId={partnerId} /> : <SentNote m={m} partnerId={partnerId} />}
             </Fragment>
           );
         }
         const prev = before?.kind === 'message' ? before.m : undefined;
+        const origin = origins.get(m.id);
         const close =
           !newDay &&
+          !origin &&
           !!prev &&
           prev.authorId === m.authorId &&
           !prev.replyCount &&
@@ -208,6 +335,7 @@ export function MessageList({ messages, sent = EMPTY, partnerId, onReply }: { me
         return (
           <Fragment key={m.id}>
             {divider}
+            {origin && <FromNote m={m} channel={origin} />}
             <MessageRow
               m={m}
               mine={mine}
@@ -256,6 +384,8 @@ export function Conversation({
   empty,
   partnerId,
   readOnly,
+  prefix,
+  beforeSend,
 }: {
   channelId: string;
   placeholder: string;
@@ -264,9 +394,18 @@ export function Conversation({
   partnerId?: string;
   /** Shown instead of the composer in a conversation you only watch. */
   readOnly?: React.ReactNode;
+  /** Put before what you send, e.g. a link to the page you are asking about. */
+  prefix?: string;
+  /** Runs before a message is sent (e.g. saving the page it is about, so the agent reads the latest). */
+  beforeSend?: () => Promise<unknown>;
 }) {
   const messages = useStore((s) => s.messages[channelId] ?? EMPTY);
-  const sent = useStore((s) => s.sent[channelId] ?? EMPTY);
+  // "Messaged …" notes are for people following their own chats, not for a DM between agents that you only watch.
+  const watching = useStore((s) => {
+    const channel = s.channels.find((c) => c.id === channelId);
+    return channel?.kind === 'dm' && !!s.me && !channel.memberIds.includes(s.me.id);
+  });
+  const sent = useStore((s) => (watching ? EMPTY : (s.sent[channelId] ?? EMPTY)));
   const loaded = useStore((s) => channelId in s.messages);
   const loadMessages = useStore((s) => s.loadMessages);
   const approvals = useStore((s) => s.approvals);
@@ -285,7 +424,8 @@ export function Conversation({
   async function send(text: string, attachments: string[]) {
     pin();
     try {
-      await api.post(`/channels/${channelId}/messages`, { text, attachments });
+      await beforeSend?.();
+      await api.post(`/channels/${channelId}/messages`, { text: prefix && text ? `${prefix}\n\n${text}` : text, attachments });
     } catch (err) {
       notify((err as Error).message, 'error');
       throw err;
@@ -306,7 +446,7 @@ export function Conversation({
           ))}
         </div>
       </div>
-      {readOnly ? <div className="composer read-only">{readOnly}</div> : <Composer key={channelId} placeholder={placeholder} onSend={send} />}
+      {readOnly ? <div className="composer read-only">{readOnly}</div> : <Composer key={channelId} placeholder={placeholder} onSend={send} draftKey={channelId} />}
     </>
   );
 }

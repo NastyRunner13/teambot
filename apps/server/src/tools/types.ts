@@ -7,6 +7,8 @@ export interface ToolContext {
   app: App;
   agent: Agent;
   run: Run;
+  /** The tool call being run (its id in the transcript). */
+  callId: string;
   signal: AbortSignal;
   computer(): Promise<ComputerHandle>;
 }

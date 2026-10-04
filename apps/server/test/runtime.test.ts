@@ -225,6 +225,51 @@ describe('agent runtime', () => {
     expect(models.requests[0].messages[0].content).toContain('write your plan with update_progress');
   });
 
+  it('stops at the step limit, then picks up where it left off when told to continue', async () => {
+    const { app, models, owner } = setup();
+    app.cfg.maxStepsPerRun = 2;
+    const writer = addAgent(app, 'Writer');
+    const plan = [
+      { text: 'Read the sources', status: 'in_progress' },
+      { text: 'Write the report', status: 'pending' },
+    ];
+    models.script('test/writer', [callTool('update_progress', { steps: plan }), callTool('read_channel', { channel: '#general' })]);
+    const dm = app.workspace.getOrCreateDm(owner.id, writer.id);
+    app.workspace.postMessage({ channelId: dm.id, authorId: owner.id, text: 'Research Acme for me' });
+    await app.runtime.idle();
+
+    const [first] = app.store.listRuns({ agentId: writer.id });
+    expect(first.status).toBe('completed');
+    expect(messagesIn(app, dm.id).at(-1)!.text).toBe("I stopped after 2 steps (the per-run limit). Tell me to continue and I'll pick up where I left off.");
+    const before = app.store.getTranscript<TranscriptMessage>(first.id);
+
+    // "continue" starts a new run that carries on from everything the first one did, checklist included.
+    models.script('test/writer', [say('Here is the report.')]);
+    app.workspace.postMessage({ channelId: dm.id, authorId: owner.id, text: 'continue' });
+    await app.runtime.idle();
+
+    const second = app.store.listRuns({ agentId: writer.id })[0];
+    expect(second.id).not.toBe(first.id);
+    expect(second.status).toBe('completed');
+    expect(second.progress).toEqual(plan);
+    const after = app.store.getTranscript<TranscriptMessage>(second.id);
+    expect(after.slice(0, before.length)).toEqual(before);
+    const resumed = String(after[before.length].content);
+    expect(resumed).toContain('stopped at the step limit');
+    expect(resumed).toMatch(/^\[system\] .*\n\nNew for you:\n.*wrote:\ncontinue$/s);
+    expect(resumed).not.toContain('Recent conversation');
+    expect(models.requests.at(-1)!.messages.some((m) => m.role === 'tool')).toBe(true);
+    expect(app.store.listEvents({ runId: second.id, types: ['run.continued'] })[0].data.from).toBe(first.id);
+    expect(messagesIn(app, dm.id).at(-1)!.text).toBe('Here is the report.');
+
+    // A job that finished is not carried into the next one.
+    models.script('test/writer', [say('You are welcome.')]);
+    app.workspace.postMessage({ channelId: dm.id, authorId: owner.id, text: 'thanks' });
+    await app.runtime.idle();
+    expect(models.requests.at(-1)!.messages).toHaveLength(2);
+    expect(app.store.listRuns({ agentId: writer.id })[0].progress).toEqual([]);
+  });
+
   it('pauses mid-tool and resumes with an honest "interrupted" result', async () => {
     const { app, models, owner, computers } = setup();
     const ops = addAgent(app, 'Ops');

@@ -5,7 +5,8 @@
 // the work, the answer goes back to the conversation the asking run worked in, together with the answers to anything
 // else that run asked, once none of them is still open. A request that ends without an answer (the run failed, was
 // stopped or ended silently, or the agent left the team) is reported the same way, so work handed on is never just
-// dropped.
+// dropped. Once it has answered, the asked agent also tells the person the work was for, in its own chat with them
+// (the runtime asks it for that note; see headsUp).
 import type { Agent, Channel, Handoff, Message, Run } from '@teambot/shared';
 import type { App } from '../app.js';
 import type { Actor } from '../workspace.js';
@@ -133,11 +134,47 @@ export class Handoffs {
         continue;
       }
       askers.add(h.fromAgentId);
-      store.settleHandoff(h.id, 'answered', workspace.messageBody(message), message.depth);
-      bus.emit('handoff.answered', { agentId: h.fromAgentId, runId: h.runId, channelId: h.originChannelId }, { handoff: store.getHandoff(h.id) });
+      store.settleHandoff(h.id, 'answered', workspace.messageBody(message), { id: message.id, depth: message.depth });
+      // The message rides along so the chat that asked can show "Message from …" where the answer came in.
+      bus.emit('handoff.answered', { agentId: h.fromAgentId, runId: h.runId, channelId: h.originChannelId }, { handoff: store.getHandoff(h.id), message });
       this.deliver(h.runId);
     }
     return askers;
+  }
+
+  /**
+   * After a run's latest reply answered teammates, the person their requests were for hears it from this agent too, in
+   * their own chat with it: who asked what, and what went back. Null when no single person is behind the requests (a
+   * group chat already shows the exchange as it happens).
+   */
+  headsUp(run: Run): { channelId: string; person: string; askers: string[] } | null {
+    const { store, workspace } = this.app;
+    if (!run.channelId) return null;
+    const reply = store.listMessagesByRun(run.id).filter((m) => m.channelId === run.channelId).at(-1);
+    if (!reply) return null;
+    const answered = store.listHandoffs({ toAgentId: run.agentId, channelId: run.channelId, statuses: ['answered'] }).filter((h) => h.answerId === reply.id);
+    for (const h of answered) {
+      const person = this.personFor(h);
+      if (!person) continue;
+      return {
+        channelId: workspace.getOrCreateDm(person, run.agentId).id,
+        person: workspace.memberName(person),
+        askers: [...new Set(answered.map((x) => workspace.memberName(x.fromAgentId)))],
+      };
+    }
+    return null;
+  }
+
+  /** The one person a request is for: the person in the DM it was asked from, through agents that asked on their behalf. */
+  private personFor(h: Handoff, hops = 0): string | null {
+    const { store, workspace } = this.app;
+    const origin = h.originChannelId ? store.getChannel(h.originChannelId) : undefined;
+    if (origin?.kind !== 'dm') return null;
+    const people = origin.memberIds.filter((id) => workspace.isHuman(id));
+    if (people.length) return people.length === 1 ? people[0] : null;
+    // A DM between agents: the asker was itself answering a teammate there.
+    const parent = store.listHandoffs({ toAgentId: h.fromAgentId, channelId: origin.id }).filter((p) => p.createdAt <= h.createdAt).at(-1);
+    return parent && hops < this.app.cfg.maxAgentDepth ? this.personFor(parent, hops + 1) : null;
   }
 
   /** A run ended (completed, failed or cancelled): requests it held without answering fail, and if it was stopped, so do its own. */

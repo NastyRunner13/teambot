@@ -49,6 +49,7 @@ describe('ask_agent', () => {
     models.script('test/analyst', [
       callTool('ask_for_approval', { action: 'Open the vendor sites' }),
       say('Acme $100/yr, Globex $120/yr. Sources: https://acme.test/pricing, https://globex.test/pricing'),
+      say('Lead asked me to compare Acme and Globex pricing. I sent back both prices with sources.'),
     ]);
     const dm = app.workspace.getOrCreateDm(owner.id, lead.id);
 
@@ -74,9 +75,89 @@ describe('ask_agent', () => {
     // The answer reached Lead where the person asked; Lead never worked in the agents' DM.
     expect(app.store.listRuns({ agentId: lead.id }).every((r) => r.channelId === dm.id)).toBe(true);
     expect(userMessages(app, lead.id).some((m) => m.includes('Analyst answered what you asked ("Compare Acme and Globex annual pricing")') && m.includes('Acme $100/yr'))).toBe(true);
-    expect(app.store.listHandoffs({ fromAgentId: lead.id })).toMatchObject([{ status: 'answered', delivered: true, originChannelId: dm.id }]);
-    // People see where the work went from the chat that asked.
-    expect(app.store.listSentElsewhere(dm.id)).toMatchObject([{ channelId: between.id, authorId: lead.id }]);
+    expect(app.store.listHandoffs({ fromAgentId: lead.id })).toMatchObject([{ status: 'answered', delivered: true, originChannelId: dm.id, answerId: answer.id }]);
+    // People see where the work went from the chat that asked, and where the answer came from.
+    expect(app.store.listSentElsewhere(dm.id).map((m) => m.id)).toEqual([request.id, answer.id]);
+    expect(app.store.listEvents({ types: ['handoff.answered'] })[0].data).toMatchObject({ message: { id: answer.id } });
+
+    // Analyst also tells the person in its own chat with them, from the run that did the work.
+    const told2 = userMessages(app, analyst.id).at(-1);
+    expect(told2).toBe(
+      `[system] Your answer went back to Lead. Now write a short note for ${owner.name}, the person it was for; it is posted in your chat with them. ` +
+        "In one or two lines, say what Lead asked you and what you sent back, including anything you couldn't do. Don't repeat the whole answer, and don't use tools.",
+    );
+    const withAnalyst = app.store.findDm(owner.id, analyst.id)!;
+    const [note] = messagesIn(app, withAnalyst.id);
+    expect(note).toMatchObject({ authorId: analyst.id, text: 'Lead asked me to compare Acme and Globex pricing. I sent back both prices with sources.' });
+    expect(app.store.getRun(note.runId!)?.channelId).toBe(between.id);
+    expect(messagesIn(app, between.id)).toHaveLength(2); // the note isn't posted where the agents talk
+    expect(app.store.listSentElsewhere(between.id).map((m) => m.id)).toEqual([note.id]);
+  });
+
+  it('has the person hear from every agent in a chain, and nobody in a group chat', async () => {
+    const { app, models, owner } = setup();
+    const lead = addAgent(app, 'Lead');
+    const analyst = addAgent(app, 'Analyst');
+    const researcher = addAgent(app, 'Researcher');
+    models.script('test/lead', [ask('Analyst', 'Size the market'), say('Asked Analyst.'), say('About $2B.'), ask('Analyst', 'Check the date'), say('[silent]'), say('It is Monday.')]);
+    models.script('test/analyst', [
+      ask('Researcher', 'Find market reports'),
+      say('[silent]'),
+      say('About $2B, from two reports.'),
+      say('Lead asked me to size the market. I said about $2B.'),
+      say('Monday.'),
+    ]);
+    models.script('test/researcher', [callTool('ask_for_approval', { action: 'Buy the market report' }), say('Two reports: $1.9B and $2.1B.'), say('Analyst asked me for market reports. I sent two.')]);
+    const dm = app.workspace.getOrCreateDm(owner.id, lead.id);
+
+    app.workspace.postMessage({ channelId: dm.id, authorId: owner.id, text: 'How big is the market?' });
+    await app.runtime.idle();
+    await approveAll(app, owner.id);
+
+    // Researcher was asked by Analyst on Lead's behalf, for the owner.
+    expect(messagesIn(app, app.store.findDm(owner.id, researcher.id)!.id).map((m) => m.text)).toEqual(['Analyst asked me for market reports. I sent two.']);
+    expect(messagesIn(app, app.store.findDm(owner.id, analyst.id)!.id).map((m) => m.text)).toEqual(['Lead asked me to size the market. I said about $2B.']);
+    expect(messagesIn(app, dm.id).map((m) => m.text)).toEqual(['How big is the market?', 'Asked Analyst.', 'About $2B.']);
+
+    // Asked from a group chat, where everyone sees the exchange: no note, and no extra turn.
+    const before = models.requests.filter((r) => r.model === 'test/analyst').length;
+    app.workspace.postMessage({ channelId: general(app).id, authorId: owner.id, text: '@Lead what day is it?' });
+    await app.runtime.idle();
+    expect(models.requests.filter((r) => r.model === 'test/analyst').length).toBe(before + 1);
+    expect(messagesIn(app, app.store.findDm(owner.id, analyst.id)!.id)).toHaveLength(1);
+    expect(messagesIn(app, general(app).id).at(-1)?.text).toBe('It is Monday.');
+  });
+
+  it('shows agents their recent work, so being asked what they did last needs no digging', async () => {
+    const { app, models, owner } = setup();
+    const lead = addAgent(app, 'Lead');
+    const analyst = addAgent(app, 'Analyst');
+    models.script('test/analyst', [
+      say('Q3 revenue was $5M.'),
+      say('Last time I worked out Q3 revenue: $5M.'),
+      say('Lead asked what I did last; I told it about Q3 revenue.'),
+      say('You are welcome.'),
+    ]);
+    models.script('test/lead', [ask('Analyst', 'What did you work on last time?'), say('Asked Analyst.'), say('Analyst worked out Q3 revenue.')]);
+    const withAnalyst = app.workspace.getOrCreateDm(owner.id, analyst.id);
+
+    app.workspace.postMessage({ channelId: withAnalyst.id, authorId: owner.id, text: 'What was Q3 revenue?' });
+    await app.runtime.idle();
+    app.workspace.postMessage({ channelId: app.workspace.getOrCreateDm(owner.id, lead.id).id, authorId: owner.id, text: 'Ask Analyst what it did last time' });
+    await app.runtime.idle();
+    app.workspace.postMessage({ channelId: withAnalyst.id, authorId: owner.id, text: 'Thanks' });
+    await app.runtime.idle();
+
+    const prompts = models.requests.filter((r) => r.model === 'test/analyst').map((r) => String(r.messages[0].content));
+    expect(prompts).toHaveLength(4);
+    expect(prompts[0]).not.toContain('## Your recent work');
+    expect(prompts[1]).toContain('## Your recent work');
+    expect(prompts[1]).toContain(`UTC, DM with ${owner.name}: "What was Q3 revenue?" → you replied "Q3 revenue was $5M."`);
+    // Work in the conversation it is in already shows there, so only the other one is listed.
+    const recent = prompts[3].slice(prompts[3].indexOf('## Your recent work'));
+    expect(recent).toContain('UTC, DM with Lead: "**Task:** What did you work on last time?');
+    expect(recent).toContain('→ you replied "Last time I worked out Q3 revenue: $5M."');
+    expect(recent).not.toContain('Q3 revenue was $5M.');
   });
 
   it('waits for every teammate a run asked, then delivers their answers together', async () => {

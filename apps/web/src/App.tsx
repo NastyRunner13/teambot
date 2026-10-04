@@ -8,6 +8,7 @@ import { overlayPanel, useStore } from './store';
 import { AppsView } from './views/AppsView';
 import { AgentChat, ChannelChat, Welcome } from './views/ChatView';
 import { NewChatView } from './views/NewChatView';
+import { PagesView, PageView } from './views/PagesView';
 import { SETTINGS_SECTIONS, SettingsView, type SettingsSection } from './views/SettingsView';
 import { JoinPage, SignInPage } from './views/SignIn';
 import { SearchView } from './views/SearchView';
@@ -105,7 +106,11 @@ export function App() {
           <Route path="/apps/:id">{(p) => <AppsView page={{ kind: 'app', id: p.id }} />}</Route>
           <Route path="/skills">{() => <AppsView page={{ kind: 'skills' }} />}</Route>
           <Route path="/skills/:name">{(p) => <AppsView page={{ kind: 'skills', skill: p.name }} />}</Route>
+          <Route path="/components">{() => <AppsView page={{ kind: 'components' }} />}</Route>
+          <Route path="/components/:name">{(p) => <AppsView page={{ kind: 'components', name: p.name }} />}</Route>
           <Route path="/files">{() => <AppsView page={{ kind: 'files' }} />}</Route>
+          <Route path="/pages" component={PagesView} />
+          <Route path="/pages/:id">{(p) => <PageView id={p.id} />}</Route>
           <Route path="/search" component={SearchView} />
           <Route path="/settings">{() => <SettingsView section="general" />}</Route>
           <Route path="/settings/:section">

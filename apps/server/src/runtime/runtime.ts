@@ -30,6 +30,29 @@ const MAX_TOOL_OUTPUT = 16_000;
 export const EMPTY_REPLY_NUDGE =
   '[system] Your last turn ended without any text, so nothing was posted. Write your reply now. If there is really nothing to say, reply with exactly [silent].';
 
+/** Starts the turn after an agent answered teammates: its reply is a note for the person the work was for. */
+const HEADS_UP = '[system] Your answer went back to ';
+const names = (list: string[]) => (list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list.at(-1)}` : list[0]);
+export const headsUpRequest = (askers: string[], person: string) =>
+  `${HEADS_UP}${names(askers)}. Now write a short note for ${person}, the person it was for; it is posted in your chat with them. ` +
+  `In one or two lines, say what ${names(askers)} asked you and what you sent back, including anything you couldn't do. Don't repeat the whole answer, and don't use tools.`;
+
+/** Starts a run that carries on from a job the step limit cut short; that job's transcript comes before it. */
+export const RESUME_NOTE =
+  '[system] Your last job in this conversation stopped at the step limit before you finished. Everything you did and found is above: build on it instead of starting over, unless the message below asks for something else.';
+
+/** A job is finished when the last word is the agent's, with no tool calls. */
+const finished = (t: TranscriptMessage[]) => {
+  const last = t.at(-1);
+  return !last || (last.role === 'assistant' && !last.tool_calls?.length);
+};
+
+/** Whether the latest instruction in the transcript is the request for a heads-up (tool results may follow it). */
+function headsUpPending(t: TranscriptMessage[]): boolean {
+  for (let i = t.length - 1; i >= 0; i--) if (t[i].role === 'user') return String(t[i].content).startsWith(HEADS_UP);
+  return false;
+}
+
 export function pendingToolCalls(t: TranscriptMessage[]): ToolCall[] {
   for (let i = t.length - 1; i >= 0; i--) {
     const m = t[i];
@@ -265,6 +288,20 @@ Don't run it again just to see the result; check the current state instead.`
     return channelId === run.channelId && (item.channelId ? item.threadId : null) === run.threadId;
   }
 
+  /**
+   * The agent's previous job in this conversation, with its transcript, when the step limit stopped it before it
+   * finished (a run that completed without a final reply). Failed and cancelled jobs start over.
+   */
+  private cutShort(run: Run): { run: Run; transcript: TranscriptMessage[] } | undefined {
+    const { store } = this.app;
+    const previous = store
+      .listRuns({ agentId: run.agentId, channelId: run.channelId ?? undefined, limit: 20 })
+      .find((r) => r.id !== run.id && r.threadId === run.threadId && r.readOnly === run.readOnly);
+    if (previous?.status !== 'completed') return undefined;
+    const transcript = store.getTranscript<TranscriptMessage>(previous.id);
+    return finished(transcript) ? undefined : { run: previous, transcript };
+  }
+
   private async stopComputerWork(run: Run) {
     try {
       await this.app.computers.cancelWork(run.agentId);
@@ -273,12 +310,13 @@ Don't run it again just to see the result; check the current state instead.`
     }
   }
 
-  private say(run: Run, text: string, route = true) {
-    const channelId = run.channelId ?? this.app.workspace.getOrCreateDm(this.app.workspace.owner().id, run.agentId).id;
+  /** Post as the run's agent in its conversation, or in `elsewhere` (a top-level message there). */
+  private say(run: Run, text: string, route = true, elsewhere?: string) {
+    const channelId = elsewhere ?? run.channelId ?? this.app.workspace.getOrCreateDm(this.app.workspace.owner().id, run.agentId).id;
     try {
       this.app.workspace.postMessage({
         channelId,
-        threadId: run.channelId ? run.threadId : null,
+        threadId: run.channelId && !elsewhere ? run.threadId : null,
         authorId: run.agentId,
         text,
         actor: { id: run.agentId, depth: run.depth, initiator: run.initiator, runId: run.id },
@@ -317,7 +355,11 @@ Don't run it again just to see the result; check the current state instead.`
       const items = store.pendingInbox(agent.id).filter((i) => this.belongsTo(run, i));
       if (items.length) {
         const first = transcript.length === 0;
-        transcript.push({ role: 'user', content: formatInbox(this.app, agent, items, first) });
+        // A message after a job the step limit cut short carries on from everything that job did ("continue").
+        const earlier = first && items.some((i) => i.kind === 'message') ? this.cutShort(run) : undefined;
+        if (earlier) transcript = earlier.transcript;
+        const input = formatInbox(this.app, agent, items, first, first && !earlier);
+        transcript.push({ role: 'user', content: earlier ? `${RESUME_NOTE}\n\n${input}` : input });
         const latest = items[items.length - 1];
         // One transaction: input is never consumed without being in the transcript, or recorded twice.
         run = store.tx(() => {
@@ -329,18 +371,20 @@ Don't run it again just to see the result; check the current state instead.`
           return store.updateRun(runId, {
             depth: Math.max(first ? 0 : run.depth, ...items.map((i) => i.depth)),
             initiator: items.some((i) => i.initiator === 'human') ? 'human' : first ? latest.initiator : run.initiator,
+            ...(earlier ? { progress: earlier.run.progress } : {}),
           });
         });
         bus.emit('run.input', scope, { items: items.length });
+        // Carries the run, so people watching see the checklist it took over.
+        if (earlier) bus.emit('run.continued', scope, { run, from: earlier.run.id });
       }
 
       // 3. Finished when the last word is the agent's, with no tool calls.
-      const last = transcript.at(-1);
-      if (!last || (last.role === 'assistant' && !last.tool_calls?.length)) return 'completed';
+      if (finished(transcript)) return 'completed';
 
       // 4. Step budget.
       if (run.steps >= cfg.maxStepsPerRun) {
-        this.say(run, `I stopped after ${run.steps} steps (the per-run limit). Tell me to continue if you want me to keep going.`, false);
+        this.say(run, `I stopped after ${run.steps} steps (the per-run limit). Tell me to continue and I'll pick up where I left off.`, false);
         return 'completed';
       }
 
@@ -354,6 +398,7 @@ Don't run it again just to see the result; check the current state instead.`
       }
       const vision = await seesImages(this.app, agent.model);
       const tools = this.app.tools.forAgent(agent).filter((t) => (!run.readOnly || usableReadOnly(t)) && (vision || !t.returnsImages));
+      const forPerson = headsUpPending(transcript);
       const res = await this.app.models.chat({
         model: agent.model,
         messages: [{ role: 'system', content: buildSystemPrompt(this.app, agent, run) }, ...toModelMessages(this.app, transcript)],
@@ -365,7 +410,7 @@ Don't run it again just to see the result; check the current state instead.`
       transcript.push(msg);
       // A turn with no text and no tool calls would end the run with nothing posted: ask once more for the reply.
       const empty = !msg.tool_calls?.length && !msg.content?.trim();
-      const askAgain = empty && transcript.at(-2)?.content !== EMPTY_REPLY_NUDGE;
+      const askAgain = empty && !forPerson && transcript.at(-2)?.content !== EMPTY_REPLY_NUDGE;
       if (askAgain) transcript.push({ role: 'user', content: EMPTY_REPLY_NUDGE });
       store.setTranscript(runId, transcript);
       run = store.updateRun(runId, {
@@ -386,10 +431,32 @@ Don't run it again just to see the result; check the current state instead.`
 
       if (!msg.tool_calls?.length) {
         const text = (msg.content ?? '').trim();
-        if (text && !/^\[silent\]$/i.test(text)) this.say(run, text);
-        else if (empty && !askAgain) this.say(run, "I finished without writing a reply (the model returned an empty answer twice). Ask me again, or tell me to continue.", false);
+        const reply = !!text && !/^\[silent\]$/i.test(text);
+        if (forPerson) {
+          // The note for the person goes to their chat with this agent; an empty or silent one is simply dropped.
+          const target = this.app.handoffs.headsUp(run);
+          if (reply && target) this.say(run, text, false, target.channelId);
+        } else if (reply) {
+          this.say(run, text);
+          const next = this.headsUpFor(run, agent);
+          if (next) {
+            transcript.push({ role: 'user', content: next });
+            store.setTranscript(runId, transcript);
+          }
+        } else if (empty && !askAgain) this.say(run, "I finished without writing a reply (the model returned an empty answer twice). Ask me again, or tell me to continue.", false);
       }
     }
+  }
+
+  /**
+   * When a reply answered teammates, one more turn writes the person their requests were for a short note on what
+   * happened. Skipped when more work for this conversation is waiting, or the step or money budget is spent.
+   */
+  private headsUpFor(run: Run, agent: Agent): string | null {
+    const target = this.app.handoffs.headsUp(run);
+    if (!target || run.steps >= this.app.cfg.maxStepsPerRun || this.app.budgets.blocked(agent)) return null;
+    if (this.app.store.pendingInbox(agent.id).some((i) => this.belongsTo(run, i))) return null;
+    return headsUpRequest(target.askers, target.person);
   }
 
   private async handleCall(run: Run, agent: Agent, call: ToolCall, signal: AbortSignal, transcript: TranscriptMessage[]): Promise<CallOutcome> {
@@ -410,7 +477,7 @@ Don't run it again just to see the result; check the current state instead.`
       return result(`Error: invalid arguments for ${tool.name}: ${truncate(detail, 1000)}`);
     }
 
-    const ctx: ToolContext = { app: this.app, agent, run, signal, computer: () => this.app.lifecycle.ready(agent) };
+    const ctx: ToolContext = { app: this.app, agent, run, callId: call.id, signal, computer: () => this.app.lifecycle.ready(agent) };
     const redactArgs = (a: Record<string, unknown>) => JSON.parse(vault.redact(JSON.stringify(a))) as Record<string, unknown>;
     const forced = FORCED_APPROVAL_TOOLS[tool.name];
 

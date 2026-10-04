@@ -7,9 +7,11 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ACTIVE_RUN_STATUSES, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, MAX_PAGE_CHARS, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
 import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
+import { ComponentError, DraftInput } from './components.js';
+import { PageConflict, PageError } from './pages.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
 import { addAgent, nameTaken, removeAgent } from './runtime/agents.js';
@@ -167,7 +169,7 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   /** Open without signing in: signing in, joining, and webhooks (which carry their own token). */
   const PUBLIC = [/^\/api\/auth(\/|\?|$)/, /^\/api\/hooks\//];
   /** Workspace settings only an owner may change. */
-  const OWNER_ONLY = /^\/api\/(policy|secrets|connectors|bridges|budget|team)(\/|\?|$)/;
+  const OWNER_ONLY = /^\/api\/(policy|secrets|connectors|bridges|budget|team|components)(\/|\?|$)/;
   const sameSite = (origin: string, host: string | undefined) => {
     try {
       return new URL(origin).host === host || new URL(origin).origin === cfg.publicUrl;
@@ -181,6 +183,9 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     // Agent computers share a Docker network with the server in the Compose setup. Their firewall keeps them off it;
     // this is the second lock: the API acts as the owner when sign-in is off, so it never answers a computer.
     if (computers.isComputerAddress(req.socket.remoteAddress)) return reply.code(403).send({ error: 'Agent computers cannot use the TeamBot API' });
+    // Interfaces agents draw run in sandboxed frames, whose requests say "Origin: null". With sign-in off the API acts as
+    // the owner, so nothing from such a frame may change anything (the frames also forbid network requests).
+    if (req.headers.origin === 'null' && req.method !== 'GET' && req.method !== 'HEAD') return reply.code(403).send({ error: 'Requests from sandboxed frames are refused' });
     if (!app.auth.teamMode) return;
     const token = cookie(req, SESSION_COOKIE);
     const human = app.auth.session(token);
@@ -966,6 +971,60 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
       app.cron.fire(s.id, { source: 'webhook', via: 'a webhook', body: payload });
       return reply.status(202).send({ ok: true });
     });
+  });
+
+  // ── pages (documents people and agents edit together) ────────────────
+  // Pages belong to the whole workspace, like /shared. A save names the revision it started from; when the page has
+  // moved on, the answer is 409 with the page as it is now, and the editor keeps its draft.
+  const pageCall = <T>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof PageError && !(err instanceof PageConflict)) throw new HttpError(err.status, err.message);
+      throw err;
+    }
+  };
+  server.get('/api/pages', async () => app.pages.list());
+  server.post('/api/pages', async (req) => {
+    const input = parse(z.object({ title: z.string(), content: z.string().max(MAX_PAGE_CHARS).default('') }), req.body);
+    return pageCall(() => app.pages.create(input, me(req).id));
+  });
+  server.get<{ Params: { id: string } }>('/api/pages/:id', async (req) => pageCall(() => app.pages.get(req.params.id)));
+  server.patch<{ Params: { id: string } }>('/api/pages/:id', async (req, reply) => {
+    const { expectedRevision, ...patch } = parse(z.object({ title: z.string().optional(), content: z.string().optional(), expectedRevision: z.number().int().min(1) }), req.body);
+    try {
+      return pageCall(() => app.pages.update(req.params.id, patch, expectedRevision, me(req).id));
+    } catch (err) {
+      if (err instanceof PageConflict) return reply.code(409).send({ error: err.message, page: err.current });
+      throw err;
+    }
+  });
+  server.delete<{ Params: { id: string } }>('/api/pages/:id', async (req) => {
+    pageCall(() => app.pages.remove(req.params.id, me(req).id));
+    return { ok: true };
+  });
+
+  // ── components (generative UI) ───────────────────────────────────────
+  // Anyone can look; only an owner saves, publishes, withdraws or deletes (OWNER_ONLY), since publishing hands a
+  // component to every agent.
+  const componentCall = <T>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof ComponentError) throw new HttpError(err.status, err.message);
+      throw err;
+    }
+  };
+  server.get('/api/components', async () => app.components.list());
+  server.put<{ Params: { name: string } }>('/api/components/:name', async (req) => {
+    const input = parse(DraftInput, req.body);
+    return componentCall(() => app.components.saveDraft(req.params.name, input, me(req).id));
+  });
+  server.post<{ Params: { name: string } }>('/api/components/:name/publish', async (req) => componentCall(() => app.components.publish(req.params.name, me(req).id)));
+  server.post<{ Params: { name: string } }>('/api/components/:name/unpublish', async (req) => componentCall(() => app.components.unpublish(req.params.name, me(req).id)));
+  server.delete<{ Params: { name: string } }>('/api/components/:name', async (req) => {
+    componentCall(() => app.components.remove(req.params.name, me(req).id));
+    return { ok: true };
   });
 
   // ── memory & search ──────────────────────────────────────────────────

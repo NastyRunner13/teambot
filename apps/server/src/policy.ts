@@ -35,7 +35,7 @@ defaults:
   internal: allow   # team tools: messages, progress
   read: allow       # looking at things: page snapshots, reading files, browsing
   write: allow      # changing things inside the agent's own computer
-  external: ask     # tools that act outside the computer (MCP servers) or add agents
+  external: ask     # tools that act outside the computer (MCP servers), add agents or set up routines
 
 rules:
   - name: Confirm clicks that send, publish, pay or delete
@@ -62,6 +62,10 @@ rules:
   - name: Confirm new agents
     tools: [create_agent]
     action: ask
+
+  - name: Review new routines
+    tools: [create_routine]
+    action: review
 
   - name: Review tasks handed to coding agents
     tools: [run_coding_agent]

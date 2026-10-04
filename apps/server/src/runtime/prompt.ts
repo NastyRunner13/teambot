@@ -20,6 +20,13 @@ export function buildSystemPrompt(app: App, agent: Agent, run: Run): string {
   const secrets = app.vault.agentNames();
   const coding = run.readOnly ? [] : availableCodingAgents(app);
   const skills = app.skills.forAgent(agent);
+  // Generative UI: components people published, and (unless turned off) interfaces the agent writes itself.
+  const components = app.components.toolsForAgents().length > 0;
+  const drawing = app.cfg.generativeUi
+    ? `- When something is better seen than read (a comparison, a chart, a timeline, a small form), draw it${components ? ' with a ui_* component if one fits, or' : ''} with show_ui, which takes a small interface you write. Plain answers stay text.\n`
+    : components
+      ? '- When something is better seen than read and a ui_* component fits, draw it with that component. Plain answers stay text.\n'
+      : '';
   const skillSection = skills.length
     ? `\n## Skills\nWritten procedures your team wants followed. When a job matches one, call use_skill with its name before you start, then follow it.\n${skills.map((s) => `- ${s.name}: ${s.description}`).join('\n')}\n`
     : '';
@@ -39,10 +46,12 @@ Channels: ${channels.map((c) => `#${c.name}${c.memberIds.includes(agent.id) ? ''
 - Talk to people only through tools: post_message for channels, send_dm to message a person directly, and ask_agent to hand a teammate agent work. Writing @Name in a channel message wakes that teammate up and hands them your message — only mention someone when you need them to act, and never mention yourself.
 - When you are done, end with a short final reply. It is posted automatically to ${replyTo ? `${ws.channelLabel(replyTo, agent.id)}${run.threadId ? ' (in the thread you were asked from)' : ''}` : 'the conversation you were asked from'}.${forAgent ? ` You are working for ${forAgent.name} here, so that reply is your answer to them: make it complete.` : ''} If there is nothing useful to say (for example you were only cc'd), reply with exactly [silent].
 - To hand someone a file, put it in /shared and attach it to your message (the attachments argument of post_message, send_dm or ask_agent).
-- For a job with several steps, write your plan with ${PROGRESS_TOOL} before you start and keep it current: the step you are on in_progress, each finished step done, and the list changed when the plan does. The person you work for watches it to follow along. Skip it for quick answers.
+- Pages are the team's shared documents (Markdown), which people and agents edit together: list_pages, read_page, create_page and edit_page. A link like /pages/page_… is a page; read it with read_page. An edit names the revision you read, so if someone saved in between, read the page again and redo your change on top of theirs. When someone wants to look a document over before it is kept, use propose_page: they approve the draft in the chat, and only then is it saved.
+${drawing}- For a job with several steps, write your plan with ${PROGRESS_TOOL} before you start and keep it current: the step you are on in_progress, each finished step done, and the list changed when the plan does. The person you work for watches it to follow along. Skip it for quick answers.
 - Work independently by default: do your own research, reasoning and execution with your tools, even when the job has several independent parts.
 - Ask an existing agent for help only when its stated role in the Team roster shows a specific specialty relevant to the task. Do not involve other agents for routine work you can handle, just because they are available, or just to split work in parallel. If no specialty fits, do the work yourself.
 - When a specialist is useful, call ask_agent with the task, the context they need (they can't see your conversation), any constraints, and what a good answer looks like. You can hand work to at most ${app.cfg.maxHandoffsPerRun} teammates per job. Their answer comes back to you here; carry on with anything that doesn't depend on it. Review their findings and take responsibility for the final answer. Don't send acknowledgements, and don't repeat a request that is still open. There is no task board.
+- For work that should happen regularly ("every hour", "each weekday morning"), set up a routine with create_routine, for yourself or a teammate; list_routines, stop_routine (with pause: true for a break) and resume_routine manage them. Routines run on TeamBot's schedule even when nobody is around, so never say it can't be done, and don't look for cron on your computer.
 - Some actions need a human's approval, or must be done by a human; you will be paused and resumed with the outcome. Before anything irreversible the system might not catch — sending things to people outside the team, spending money, deleting data — call ask_for_approval.
 - If a site needs a login, 2FA or a CAPTCHA, call request_human_takeover and say exactly what you need.
 - Secrets: never ask humans to paste passwords into chat. To use a stored secret, write {{secret:NAME}} inside a tool argument; it is filled in when the tool runs and you never see the value. Available secrets: ${secrets.length ? secrets.join(', ') : 'none'}.
@@ -58,16 +67,51 @@ Channels: ${channels.map((c) => `#${c.name}${c.memberIds.includes(agent.id) ? ''
 - To find something from earlier (a decision, a link, a result), use search_history. Old messages can point to files that were deleted since; check a file exists before sending someone to it.
 ${agent.desktop ? '- You also have the whole desktop: computer_screenshot to see the screen, then computer_click/type/key/scroll/drag with pixel coordinates from the latest screenshot. Prefer browser_* tools for web pages (they are faster and more precise); use the desktop for other apps, file dialogs, or pages the browser tools cannot handle.\n' : ''}${coding.length ? `- For substantial programming work, hand the task to a coding agent with run_coding_agent (${coding.join(', ')}). Give it the folder and a precise task, then check its report and the result yourself.\n` : ''}${run.readOnly ? '- This run is READ-ONLY (a monitoring routine): you can look at pages, files and the workspace, but tools that change things are not available. Report what you find; if nothing needs attention, reply [silent].\n' : ''}${skillSection}
 ${app.memory.promptSection(agent)}
-
+${recentWork(app, agent, run)}
 Current time: ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC.`;
 }
 
-/** Turns inbox items into the user message for the model. The first message of a run also gets recent channel context. */
-export function formatInbox(app: App, agent: Agent, items: InboxItem[], firstInRun: boolean): string {
+const RECENT_JOBS = 5;
+
+/**
+ * The agent's last few jobs in other conversations: where, what it was asked, and how it ended. Without it, "what did
+ * you do last time?" asked anywhere but the chat the work was in sends the agent searching its own history.
+ */
+function recentWork(app: App, agent: Agent, run: Run): string {
+  const ws = app.workspace;
+  const flat = (s: string, n: number) => {
+    const t = s.replace(/\s+/g, ' ').trim();
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  };
+  const jobs: string[] = [];
+  for (const r of app.store.listRuns({ agentId: agent.id, limit: 30 })) {
+    if (jobs.length >= RECENT_JOBS) break;
+    if (r.id === run.id || !r.channelId || r.channelId === run.channelId) continue;
+    const channel = app.store.getChannel(r.channelId);
+    if (!channel || !ws.canSeeFrom(channel, agent.id, run.channelId)) continue;
+    const posted = app.store.listMessagesByRun(r.id);
+    const reply = posted.filter((m) => m.channelId === r.channelId).at(-1);
+    const files = [...new Set(posted.flatMap((m) => m.attachments.map((a) => a.path)))];
+    const ended =
+      r.status === 'failed' ? `failed${r.error ? ` (${flat(r.error, 120)})` : ''}` : r.status === 'cancelled' ? 'a person stopped it' : reply ? `you replied "${flat(reply.text, 280)}"` : 'you posted no reply';
+    jobs.push(`- ${r.createdAt.slice(0, 16).replace('T', ' ')} UTC, ${ws.channelLabel(channel, agent.id)}: "${flat(r.title, 140)}" → ${ended}${files.length ? `; files: ${files.join(', ')}` : ''}`);
+  }
+  if (!jobs.length) return '';
+  return `\n## Your recent work
+Your last jobs in other conversations, newest first. To see more of one, read_channel that conversation.
+${jobs.join('\n')}
+`;
+}
+
+/**
+ * Turns inbox items into the user message for the model. The first message of a run also gets recent channel context,
+ * unless the run carries on from an earlier job's transcript, which already has it.
+ */
+export function formatInbox(app: App, agent: Agent, items: InboxItem[], firstInRun: boolean, withHistory = firstInRun): string {
   const ws = app.workspace;
   const parts: string[] = [];
 
-  if (firstInRun) {
+  if (withHistory) {
     const first = items.find((i) => i.kind === 'message' && i.channelId);
     const channel = first?.channelId ? app.store.getChannel(first.channelId) : undefined;
     if (first && channel) {
