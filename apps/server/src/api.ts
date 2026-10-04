@@ -1103,16 +1103,31 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     bus.emit('file.deleted', { actorId: me(req).id }, { path: toSharedRef(cfg.sharedDir, sharedPath(rel)) });
     return { ok: true };
   });
+  // Agents write these files, so nothing that could run as a page on this origin is served as one: HTML and SVG go out
+  // as plain text, and the web app previews them in a sandboxed frame.
   const TYPES: Record<string, string> = {
     '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8',
-    '.json': 'application/json', '.html': 'text/plain; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'text/plain; charset=utf-8', '.pdf': 'application/pdf',
+    '.json': 'application/json', '.html': 'text/plain; charset=utf-8', '.htm': 'text/plain; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
+    '.svg': 'text/plain; charset=utf-8', '.pdf': 'application/pdf',
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.flac': 'audio/flac',
+    '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
   };
   server.get<{ Querystring: { path?: string; download?: string } }>('/api/shared/file', async (req, reply) => {
     const file = sharedPath(req.query.path ?? '');
     const opened = inShared(() => openSharedFile(cfg.sharedDir, req.query.path ?? ''));
     if (!opened) throw new HttpError(404, 'file not found');
+    // Previews ask again whenever an agent may have changed the file; an unchanged one costs a 304.
+    const st = fs.fstatSync(opened.fd);
+    const etag = `"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
+    reply.header('etag', etag);
+    reply.header('cache-control', 'no-cache');
+    if (req.headers['if-none-match'] === etag) {
+      fs.closeSync(opened.fd);
+      return reply.code(304).send();
+    }
     reply.header('content-type', TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream');
+    reply.header('content-length', st.size);
     reply.header('x-content-type-options', 'nosniff');
     if (req.query.download) reply.header('content-disposition', `attachment; filename="${path.basename(file).replace(/"/g, '')}"`);
     return reply.send(fs.createReadStream('', { fd: opened.fd }));
