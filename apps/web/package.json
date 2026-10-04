@@ -13,6 +13,7 @@
     "@fontsource-variable/inter": "^5.3.0",
     "@novnc/novnc": "^1.7.0",
     "@teambot/shared": "workspace:*",
+    "highlight.js": "^11.12.0",
     "lucide-react": "^1.49.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

@@ -1,20 +1,22 @@
 // The /shared folder: deliverables every agent and human can see.
-import { Download, Eye, FileText, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { Download, Eye, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import type { SharedFile } from '@teambot/shared';
 import { api } from '../api';
 import { FileActions, FileBody, deleteSharedFile, fileUrl } from '../components/FilePreview';
+import { FileTypeIcon } from '../components/FileView';
 import { MenuButton, MenuItem, MenuSeparator } from '../components/Menu';
+import { fileType } from '../lib/files';
 import { ago, bytes } from '../lib/format';
-import { useStore } from '../store';
+import { useFilesVersion, useStore } from '../store';
 
 export function FilesView() {
   const search = useSearch();
   const [, navigate] = useLocation();
   const selected = new URLSearchParams(search).get('path');
   // Re-list when a tool finishes or a file is uploaded or deleted (that's when files can change), not on every event.
-  const events = useStore((s) => s.events.reduce((n, e) => (e.type === 'tool.finished' || e.type === 'file.uploaded' || e.type === 'file.deleted' ? n + 1 : n), 0));
+  const events = useFilesVersion();
   const notify = useStore((s) => s.notify);
   const [files, setFiles] = useState<SharedFile[] | null>(null);
   const [uploading, setUploading] = useState(0);
@@ -79,7 +81,7 @@ export function FilesView() {
             const open = () => navigate(`/files?path=${encodeURIComponent(f.path)}`);
             return (
               <div key={f.path} className={`list-row clickable hover-actions ${f.path === selected ? 'selected' : ''}`} onClick={open}>
-                <FileText size={15} className="faint" />
+                <FileTypeIcon type={fileType(f.path)} size={15} className="faint" />
                 <div className="grow" style={{ minWidth: 0 }}>
                   <div className="ellipsis mono small">{name}</div>
                   <div className="small faint">

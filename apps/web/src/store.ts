@@ -33,7 +33,8 @@ export type PanelView =
   | { kind: 'routine'; id: string }
   | { kind: 'routine-edit'; agentId: string; id: string | null }
   | { kind: 'memory'; agentId: string }
-  | { kind: 'customize'; agentId: string };
+  | { kind: 'customize'; agentId: string }
+  | { kind: 'file'; path: string };
 
 export interface PanelState {
   open: boolean;
@@ -102,7 +103,10 @@ interface State {
   openThread(rootId: string): void;
   openRun(runId: string): void;
   toggleSidebar(): void;
-  openFile(path: string | null): void;
+  /** Preview a /shared file: in the panel beside a chat, or in a dialog anywhere else. */
+  openFile(path: string): void;
+  /** Show a /shared file in the dialog over everything (null closes it). */
+  showFileDialog(path: string | null): void;
   notify(text: string, kind?: 'info' | 'error'): void;
   loadPages(): Promise<void>;
   loadComponents(): Promise<void>;
@@ -135,6 +139,12 @@ function remember(key: string, value: string) {
 
 /** The panel covers the chat instead of sitting beside it (see the 1100px breakpoint in styles.css). */
 export const overlayPanel = () => window.innerWidth <= 1100;
+/** Pages with the panel beside them: a chat with an agent, or a group chat. */
+const CHAT_PATH = /^\/(agents|c)\/[^/]+\/?$/;
+
+/** The newest event that may have changed a file in /shared, so open previews can check theirs. */
+export const useFilesVersion = () =>
+  useStore((s) => s.events.findLast((e) => e.type === 'tool.finished' || e.type === 'file.uploaded' || e.type === 'file.deleted')?.id ?? 0);
 
 let socket: WebSocket | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -280,6 +290,11 @@ export const useStore = create<State>((set, get) => ({
   },
 
   openFile(path) {
+    if (CHAT_PATH.test(location.pathname)) get().showPanel({ view: { kind: 'file', path } });
+    else set({ preview: path });
+  },
+
+  showFileDialog(path) {
     set({ preview: path });
   },
 

@@ -11,8 +11,8 @@ import { useTheme } from '../lib/theme';
 import { useStore } from '../store';
 import { Modal } from './Modal';
 
-const CDNS = 'https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com';
-const CSP = [
+export const CDNS = 'https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com';
+export const CSP = [
   "default-src 'none'",
   `script-src 'unsafe-inline' ${CDNS}`,
   `style-src 'unsafe-inline' ${CDNS}`,
@@ -29,7 +29,7 @@ const CSP = [
 export type WidgetSource = Pick<Widget, 'title' | 'html' | 'css' | 'js' | 'args'>;
 
 /** Light or dark as the app shows it now, following the system when the theme is Auto. */
-function useScheme(): string {
+export function useScheme(): string {
   const [theme] = useTheme();
   const dark = useSyncExternalStore(
     (fn) => {
@@ -43,16 +43,16 @@ function useScheme(): string {
 }
 
 /** The app's theme as variables the frame can use: it can't see the app's stylesheet. */
-function themeTokens(scheme: string): string {
+export function themeTokens(scheme: string): string {
   const css = getComputedStyle(document.documentElement);
   const v = (name: string) => css.getPropertyValue(name).trim();
   return `:root{color-scheme:${scheme};--tb-bg:${v('--bg')};--tb-surface:${v('--panel-2')};--tb-raised:${v('--panel-3')};--tb-text:${v('--text')};--tb-muted:${v('--muted')};--tb-border:${v('--border-strong')};--tb-accent:${v('--accent')};--tb-on-accent:${v('--on-accent')};--tb-ok:${v('--ok')};--tb-warn:${v('--warn')};--tb-bad:${v('--danger')};--tb-info:${v('--info')};--tb-font:${v('--sans')};--tb-mono:${v('--mono')};--tb-radius:10px}`;
 }
 
 /** JSON that can sit inside a <script> element. */
-const scriptJson = (value: unknown) => JSON.stringify(value ?? {}).replace(/</g, '\\u003c');
+export const scriptJson = (value: unknown) => JSON.stringify(value ?? {}).replace(/</g, '\\u003c');
 /** Text that can't close the element it sits in. */
-const inside = (text: string, tag: 'script' | 'style') => text.replace(new RegExp(`</(${tag})`, 'gi'), '<\\/$1');
+export const inside = (text: string, tag: 'script' | 'style') => text.replace(new RegExp(`</(${tag})`, 'gi'), '<\\/$1');
 
 /**
  * The frame's document. It reports its height so the frame grows with it; below `maxHeight` it shows no scrollbar of
