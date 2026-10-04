@@ -35,8 +35,10 @@ export class ScriptedProvider implements ModelProvider {
     const queue = this.scripts.get(req.model)?.length ? this.scripts.get(req.model)! : this.scripts.get('*');
     const step = queue?.shift();
     if (!step) return { message: say('[silent]'), finishReason: 'stop', model: req.model, usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 } };
-    const message = typeof step === 'function' ? step(req) : step;
-    return { message, finishReason: message.tool_calls ? 'tool_calls' : 'stop', model: req.model, usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.0001 } };
+    const { cutOff, ...message } = typeof step === 'function' ? step(req) : step;
+    // A step marked cutOff plays a reply that hit the output limit.
+    const finishReason = cutOff ? 'length' : message.tool_calls ? 'tool_calls' : 'stop';
+    return { message, finishReason, model: req.model, usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.0001 } };
   }
 
   async listModels(): Promise<ModelInfo[]> {

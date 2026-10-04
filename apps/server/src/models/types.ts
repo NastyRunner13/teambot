@@ -26,6 +26,8 @@ export interface AssistantMessage {
   tool_calls?: ToolCall[];
   /** Provider reasoning blocks; OpenRouter asks for these to be sent back unchanged across tool calls. */
   reasoning_details?: unknown;
+  /** The model stopped at its output limit, so its tool arguments may be incomplete. Kept in the transcript only. */
+  cutOff?: boolean;
 }
 export interface ToolMessage {
   role: 'tool';
