@@ -86,7 +86,7 @@ Write short labels: Create new agent, Customize, Pause, Edit, Full log. Empty st
 
 ## Layout
 
-- **Sidebar** (300px; 72px when collapsed, remembered per browser): collapse, search and new-chat buttons; the conversation list newest first (a chat per agent, each group chat, and DMs with people in team mode); the profile button and Connect apps at the bottom.
+- **Sidebar** (300px; 72px when collapsed, remembered per browser): collapse, pages, search and new-chat buttons; the conversation list newest first (a chat per agent, each group chat, and DMs with people in team mode); the profile button and Connect apps at the bottom.
 - **Chat**: messages up to 780px wide, a floating pill with the agent or group name (it opens the profile), and a pill-shaped composer with an attach button and a round send button.
 - **Panel** (400px): the agent's or group's profile, or a page opened from it (a routine, the routine editor, memory, customize, a thread, a run's full log). It sits beside the chat on wide screens and covers it at 1100px and below, where it starts closed and closes when you switch chats.
 - **Settings frame**: Settings and Connect apps share it. The sections are listed on the left (232px, under "Settings" and "Connect apps" labels) and the open one is on the right, up to 760px wide (960px for the marketplace and the policy editor). Where the frame has less than 760px of room, the sections become a strip of pills along the top that scrolls sideways.
@@ -104,15 +104,35 @@ Each row: avatar (40px), name, and one line of preview — the last message with
 
 Your messages are right-aligned bubbles; everyone else's are left-aligned. In a chat with one agent its name isn't repeated; in group chats the author's avatar and name head each run of messages. Hovering shows the time, Reply (thread) and Copy. System notices (📋, ⚠️) are centered muted text without a bubble.
 
-When an agent working for a conversation messages someone elsewhere, the conversation shows a centered line at that point: "Messaged [blob] Job Scout", "Messaged you" or "Posted in #launch", with the author's name first when it isn't the agent you're chatting with. Several posts in a row to the same place share one line. It opens that conversation. A conversation between two agents has a "Job Scout ⇄ Writer" pill, names the author of every message, and has no composer: a line at the bottom points to your own chat with either agent.
+When an agent working for a conversation messages someone elsewhere, the conversation shows a centered line at that point: "Messaged [blob] Job Scout", "Messaged you" or "Posted in #launch", with the author's name first when it isn't the agent you're chatting with. When the teammate answers, a "Message from [blob] Job Scout" line marks where the answer came in. Each line opens that conversation. Between two messages, the notes share lines: several posts to one place count once, and an agent messaging several teammates becomes one line with their blobs overlapping, "Messaged [blobs] 3 agents" ("teammates" when people are among them), which opens to a line per conversation. Answers come back at different times, so each keeps its own "Message from" line. These lines are for the people in a chat: a conversation between two agents, which you only watch, shows none.
+
+The other way round, an agent's message that came out of work in another conversation has a line above it naming where: "Asked by [blob] Writer" (a teammate's request, in the two agents' DM) or "From #launch". After answering a teammate, an agent writes the person a short note in its own chat with them, so that is where the "Asked by" line usually appears. A conversation between two agents has a "Job Scout ⇄ Writer" pill, names the author of every message, and has no composer: a line at the bottom points to your own chat with either agent.
 
 ### Work notes
 
 While an agent works for a conversation, one live line at the bottom says what it is doing now ("Search history for …", "Waiting for your approval"), with a shimmer, led by the agent's name unless it's the one you're chatting with. An agent on a job with several steps keeps a plan (the `update_progress` checklist): then the line names the step it is on with a count ("Deep-dive tiers… · 1 of 4"), and the checklist shows below it, open by default, every step listed: done ones checked, the current one spinning, the rest as empty circles. Without a plan the line expands to the actions so far. Either way it ends with Full log, Watch its computer and Stop.
 
-When the run finishes, a collapsed note sits above its first message: "Worked for 2m 14s · 5 steps" (the plan's steps, or "3 of 5 steps done" if it stopped short; without a plan, the number of actions). Expanded, it shows the plan, or else only actions and outcomes (tool calls, a human's answers, failures, budget stops), never the model's thinking. Runs with neither get no note. The run's page in the panel shows the plan above the full log.
+When the run finishes, a collapsed note sits above its first message: "Worked for 2m 14s · 5 steps" (the plan's steps, or "3 of 5 steps done" if it stopped short; without a plan, the number of actions). Expanded, it shows the plan and the actions as tool cards (folded into "N actions" under a plan), then how it ended if it failed or was stopped; never the model's thinking. Runs with neither get no note. The run's page in the panel shows the plan above the full log.
 
-There is no task board. Agents hand each other work by message (see the "Messaged …" line above).
+**Tool cards** (after OpenDots): one 540px card per action, on `--panel-2` with a hairline border and 12px radius. A 26px icon tile, the title in the tense of its state ("Running a command" while it works, "Ran a command" once done, the request itself when it never ran), the thing acted on in small muted text (monospace for commands, URLs and paths), and on the right the duration or the state ("Failed" in red, "Waiting for you" in amber). A command that exits non-zero counts as failed. Cards with output open to it (monospace on `--bg`, at most 220px tall), screenshots, a person's note, or a link to the page or file it touched. While the agent works, its latest card sits under the live line.
+
+There is no task board. Agents hand each other work by message (see the "Messaged …", "Message from …" and "Asked by …" lines above).
+
+### Interfaces agents draw (generative UI)
+
+A message can carry an interface (after OpenBot): a card with the title, its source in small muted text (`ui_price_table`, or "Drawn by the agent"), an expand button that opens it larger in a dialog, and the frame itself, which grows with its content up to 720px. The bubble steps aside for it: no bubble color, the column's width up to 640px, with any caption above. Inside the frame, interfaces use the `--tb-*` variables (`--tb-text`, `--tb-muted`, `--tb-surface`, `--tb-raised`, `--tb-border`, `--tb-accent`, `--tb-ok`, `--tb-warn`, `--tb-bad`, `--tb-font`, `--tb-mono`, `--tb-radius`), which carry the app's current theme, so a chart follows Light and Dark like everything else. A button in it can offer text for the message box; the person sends it.
+
+### Review before saving
+
+An agent's draft page appears as an approval card in blue (`--info`) rather than amber: "Writer wrote a page for you to review", the draft rendered as it will read in an inner panel (up to 420px, scrolling), a line saying nothing is saved until you approve, a note field, **Decline** and **Approve & save**.
+
+### Pages
+
+**Library** (`/pages`): a 26px title with one line of explanation and **New page**, a rounded search field, then a row per page (icon, title, "Edited by Writer · 2h ago", its length). **A page** (`/pages/:id`): a bar with All pages, the save state ("All changes saved" with a green check, "Saving…", "Unsaved changes", "Changed elsewhere" in amber, "Couldn't save" in red), Write / Preview, **Ask an agent** and a ⋯ menu (save now, download or copy the Markdown, delete). The document is a 760px reading column: a 32px title you edit in place, "Edited by … · revision N", then the Markdown editor (15.5px, line height 1.75, growing with the text) or its preview (double-click to edit). When someone else saves while you have unsaved changes, an amber notice names them and offers Load their version, Download my changes and Keep mine; nothing of yours is lost until you choose. Ask an agent opens your chat with an agent in a 400px side panel with an agent picker.
+
+### Components playground
+
+Under Connect apps → Components, in the list-and-detail frame Skills uses: each component with its tool name and a badge (Draft, Published, "Published · changes not published", Withdrawn). The detail edits the title in place, "What it is for" (what agents read), and tabs for HTML, CSS, Script, Arguments (JSON Schema) and Sample, beside a live preview in the same sandbox chats use (below it in narrow frames). Save draft and Publish sit top right; Withdraw and Delete at the bottom. Members see it read-only.
 
 ### Agent profile
 

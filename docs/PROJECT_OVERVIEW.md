@@ -310,7 +310,7 @@ The order inside `Runtime.loop()` determines both responsiveness and safety:
 
 1. Check the abort signal and reload the run, agent, and saved transcript.
 2. Find uncompleted tool calls from the latest assistant message. Execute only the first pending call. Save its tool result and loop again. If it needs a human decision, return a waiting status immediately.
-3. Only after that tool batch is drained, collect ready inbox items that belong to this run. Append a single combined `user` message. In one synchronous SQLite transaction, mark those inputs consumed, save the transcript, and update depth/initiator.
+3. Only after that tool batch is drained, collect ready inbox items that belong to this run. Append a single combined `user` message. If this is the run's first input, it includes a message, and the agent's previous run in the same conversation was cut short by the step limit, the run starts from that run's transcript and checklist instead of an empty one. In one synchronous SQLite transaction, mark those inputs consumed, save the transcript, and update depth/initiator.
 4. If there is no input or the last message is an assistant answer without tool calls, finish.
 5. If the step limit is reached, post a non-routed stop note and finish.
 6. Check budget, compact old context if necessary, rebuild the system prompt and eligible tool schemas, and make one model call.
@@ -359,6 +359,8 @@ A person's DM with an agent belongs to that agent. If you mention Writer inside 
 
 The asked agent is told that its final reply is its answer. That reply is still posted in the agents' DM, but instead of waking the asker there, it goes back to the **conversation the asking run worked in** (the person's chat, or the group chat and thread). All of one run's answers arrive together, in one inbox item, once none of them is still open; an answer that comes while the asking run is still working is folded into that run. If the asking run is itself working for another agent, it ends with `[silent]` after asking and answers its own asker once it hears back.
 
+Once its reply has answered a request, the asked agent gets one more turn (`headsUpRequest` in `runtime.ts`) to write a one- or two-line note for the person the request was for, posted in its own chat with them: who asked what, and what went back. That person is the one in the DM the request was asked from, followed back through agents that asked on someone's behalf (`Handoffs.headsUp`). A request from a group chat gets no note, and neither does one whose agent has more work waiting for that conversation, has hit the step limit or is over budget. An empty or `[silent]` note is dropped.
+
 A request that ends without an answer is said out loud, the same way: the asked agent's run failed, a person stopped it, it finished without replying (or hit the step limit), or the agent was removed. The asker is told who didn't answer and why, and to do that part itself or say plainly that it didn't come back. If the asked agent runs out of budget mid-answer, the asker is told once and the handoff stays open. If the asking run is stopped or fails, its open requests are cancelled and a late answer wakes nobody.
 
 `ask_agent` refuses: asking yourself or a person; asking an agent that is waiting on your answer (say it in your reply instead); a paused or over-budget agent; a job already passed between agents `TEAMBOT_MAX_AGENT_DEPTH` times; and a run that has already handed work to `TEAMBOT_MAX_HANDOFFS_PER_RUN` teammates (default 4), counting agents it @mentioned in group chats. `post_message` applies the same limit to new agent mentions and refuses a DM with another agent.
@@ -371,7 +373,7 @@ Messages carry an agent-hop depth. Human messages start at depth zero. Agent mes
 
 Prompts also discourage unnecessary acknowledgements and repeated handoffs. The limit is a routing guard, not proof that every collaboration will reach a useful conclusion.
 
-The UI can show “Messaged …” inside the initiating conversation and link to the agents' conversation. That visual association comes from the outgoing message's `runId`. The answer's return trip comes from the handoff record, and the asking run's full log shows “… answered” or “No answer from …” when it settles.
+The UI can show “Messaged …” inside the initiating conversation and link to the agents' conversation. That visual association comes from the outgoing message's `runId`. The answer's return trip comes from the handoff record: it keeps the answering message (`answer_id`, migration 18), so the initiating conversation also shows “Message from …” where the answer came in (`listSentElsewhere`, and live from the `handoff.answered` event, which carries the message). The asked agent's note to the person shows in their chat under “Asked by …”, because the note's run worked in the agents' DM. The asking run's full log shows “… answered” or “No answer from …” when it settles.
 
 ### Routing algorithm and message provenance
 
@@ -460,6 +462,10 @@ This is a **behavioral instruction**, rather than a server-side semantic classif
 ### Permanent teammates
 
 `create_agent` lets an agent propose a permanent teammate for an ongoing specialty. The default policy requires human approval. It validates names, creator limits, requested skills, and requested MCP permissions before asking, and checks again at execution.
+
+### Routines agents set up
+
+When a person asks for something to happen regularly, an agent sets up a time-based routine with `create_routine` (`tools/routine-tools.ts`), for itself or a teammate: a name, a 5-field cron in UTC and the prompt the agent gets each time. It reports in the group chat it was set up from, or, from a DM, in the DM between that person and the agent that runs it. The default policy has a reviewer check it (risk `external`, so a workspace with its own saved policy asks a person). It is refused, before anyone reviews it, when it would run more often than every 15 minutes (`MIN_ROUTINE_MINUTES`), when its agent already has 10 routines, or when the run asking is itself a routine's. `list_routines` shows routines the run may read about. `stop_routine` stops one the agent runs or set up: with `pause: true` it is paused, to bring back with `resume_routine`; otherwise a routine an agent set up is removed, and one a person made is only paused, so the person can resume or delete it. A routine's own run can't resume routines. Webhook, email, Slack and calendar routines still need a person, in the routine editor.
 
 The new agent:
 
@@ -669,10 +675,17 @@ This is the built-in tool inventory in the reviewed source. “Risk” selects a
 | `update_progress` | Save the run's full checklist | Internal; read-only eligible |
 | `ask_for_approval` | Explicitly pause for a human decision | Internal; forced approval flow |
 | `request_human_takeover` | Ask a human to perform a computer step | Internal; forced takeover flow |
+| `list_pages`, `read_page` | Find and read the team's pages (Markdown documents), with each page's revision | Read; `read_page` output is untrusted |
+| `create_page`, `edit_page` | Write a page; edits name the revision they started from and are refused if it moved on | Write |
+| `propose_page` | Show a person a draft page; saved only on **Approve & save** | Internal; forced approval flow |
+| `show_ui` | Draw an interface the agent writes (HTML, CSS, script) in a sandboxed frame in the chat | Internal; read-only eligible; off with `TEAMBOT_GENERATIVE_UI=0` |
+| `ui_<name>` | Draw a published component, with arguments checked against its JSON Schema | Internal; read-only eligible; one per published component |
+| `draft_component` | Save a reusable component as a draft for a person to publish | Write |
 | `use_skill` | Load instructions and copy eligible supporting files | Internal; read-only eligible |
 | `remember`, `forget` | Add or remove lasting agent/team notes | Internal; excluded from read-only runs; team changes reviewed by default |
 | `search_history` | Find accessible past messages | Internal; read-only eligible |
 | `create_agent` | Propose a permanent specialist teammate | External; asks by default |
+| `create_routine`, `list_routines`, `stop_routine`, `resume_routine` | Set up, see, pause, resume and stop time-based routines for itself or a teammate | `create_routine` external, reviewed by default; the others internal |
 | `shell` | Run Bash on the agent computer | Write; default 120 seconds, declared maximum 900 |
 | `read_file`, `list_files` | Read text or list computer files | Read |
 | `write_file` | Create, overwrite, or append text | Write |
@@ -688,7 +701,7 @@ Read-only selection is `readOnlyOk ?? risk === 'read'`. The word “internal” 
 
 Page, file-content, shell, coding, and MCP results are marked untrusted where defined. A listing or an internal message is not handled identically to arbitrary outside text.
 
-Sources: [workspace tools](../apps/server/src/tools/workspace-tools.ts), [knowledge tools](../apps/server/src/tools/knowledge-tools.ts), [computer tools](../apps/server/src/tools/computer-tools.ts), [desktop tools](../apps/server/src/tools/desktop-tools.ts), [coding tools](../apps/server/src/tools/coding-tools.ts), [MCP](../apps/server/src/tools/mcp.ts).
+Sources: [workspace tools](../apps/server/src/tools/workspace-tools.ts), [page tools](../apps/server/src/tools/page-tools.ts), [UI tools](../apps/server/src/tools/ui-tools.ts) and [components](../apps/server/src/components.ts), [knowledge tools](../apps/server/src/tools/knowledge-tools.ts), [computer tools](../apps/server/src/tools/computer-tools.ts), [desktop tools](../apps/server/src/tools/desktop-tools.ts), [coding tools](../apps/server/src/tools/coding-tools.ts), [MCP](../apps/server/src/tools/mcp.ts).
 
 ## 11. Policy, review, and human approval
 
@@ -1305,7 +1318,7 @@ These are not pre-reserved exact dollar limits: a permitted in-flight call or co
 | Compaction threshold | 60,000 estimated tokens | Triggers old-context summarization |
 | Tool output | 16,000 characters | Gateway text-result limit |
 
-At the step limit, the run is marked completed with a message asking the human to continue; that status does not imply the original task was fully finished. A progress checklist's count is independent of model-call count. Updating it is excluded from displayed action counts.
+At the step limit, the run is marked completed with a message asking the human to continue; that status does not imply the original task was fully finished. The next message to that agent in the same conversation starts a run that carries over the stopped run's transcript and checklist, so "continue" resumes the work rather than rebuilding it (compaction keeps the carried transcript within `TEAMBOT_COMPACT_AT_TOKENS`). Failed and cancelled runs are not carried over. A progress checklist's count is independent of model-call count. Updating it is excluded from displayed action counts.
 
 Budget days/months reset in **UTC**. Midnight UTC is **05:30 in Asia/Kolkata**. Cron timing is a separate server-timezone matter.
 
