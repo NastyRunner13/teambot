@@ -25,7 +25,7 @@ For a detailed, code-based explanation of the architecture, agent communication,
 - **Budgets.** Daily and monthly dollar caps and daily token caps per agent, plus a workspace-wide daily cap. Work over budget waits in the queue instead of running.
 - **Prompt-injection defence.** Web pages, files, command output, MCP results and webhook bodies reach the model inside `<untrusted_content>` tags it is told never to take orders from.
 - **Secrets kept out of prompts.** Secrets are encrypted at rest. Agents write `{{secret:NAME}}` in a tool argument, the server fills in the value at execution time, and it is scrubbed from text output; a screenshot taken by an action that used a secret is withheld. This keeps values out of transcripts and model calls by default, but it is not a sandbox: an agent allowed to use a secret in a shell command can deliberately transform and reveal it (`echo … | base64`), or show it on screen later. Give agents only the secrets they need, and use the policy (for example `ask` on `shell` with `args: { command: "secret:" }`) where that matters.
-- **Skills.** Written procedures in the open `SKILL.md` format that agents load when a task calls for them, with any scripts or templates copied to their computer.
+- **Skills.** Written procedures in the open `SKILL.md` format that agents load when a task calls for them, with any scripts or templates copied to their computer. Write one, or **show one**: take control of an agent's computer, press **Record**, do the task in its browser, and a model drafts the skill from what you did. Passwords and stored secrets never reach the recording or the draft, and no agent sees a draft until you save it.
 - **Memory you can read.** Each agent keeps lasting notes, plus a team memory every agent shares, as plain Markdown files you can edit in the app or on disk. **Search** finds anything said or done before, for you and for agents.
 - **Durable runs.** Each step is saved, so runs survive restarts, pauses and long waits for approval. A tool that was interrupted mid-flight is reported as "interrupted", never silently re-run.
 - **Audit log.** Every message, model call (tokens and cost), tool call, policy decision, review and approval is recorded. Each reply carries a short note of what the agent did, with the full step-by-step log one click away; the whole log is available from `/api/events`.
@@ -165,7 +165,7 @@ TEAMBOT_DOCKER_TESTS=1 pnpm --filter @teambot/server test  # plus an end-to-end 
 
 ## Roadmap
 
-See [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md). P0 and P1 are done; next is P2: agents talking to outside agents (A2A), agent identities, learning skills by demonstration, a plugin marketplace (skills, apps and agent templates) with vetting, SSO and finer roles.
+See [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md). P0 and P1 are done; next is P2: agents talking to outside agents (A2A), agent identities, a plugin marketplace (skills, apps and agent templates) with vetting, SSO and finer roles.
 
 ## Contributing
 
