@@ -22,6 +22,9 @@ import {
   type Page,
   type PageComment,
   type PageSummary,
+  type Recording,
+  type RecordingStatus,
+  type RecordingSummary,
   type Run,
   type RunStatus,
   type RunSummary,
@@ -310,6 +313,27 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE inbox ADD COLUMN comment_thread_id TEXT;
   ALTER TABLE handoffs ADD COLUMN origin_comment_thread_id TEXT;
   `,
+  // 21: learning by demonstration. A person records a task on an agent's computer; the actions (secrets redacted) and
+  // a few stills become a SKILL.md draft that stays here, out of agents' reach, until a person saves it as a skill.
+  `
+  CREATE TABLE recordings (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    log TEXT NOT NULL DEFAULT '[]',
+    frames TEXT NOT NULL DEFAULT '[]',
+    dropped INTEGER NOT NULL DEFAULT 0,
+    draft TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    started_by TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    stopped_at TEXT,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX recordings_by_agent ON recordings (agent_id, started_at);
+  `,
 ];
 
 type Row = Record<string, SQLInputValue>;
@@ -450,6 +474,31 @@ const toComponent = (r: Row): UiComponent => {
     updatedAt: String(r.updated_at),
   };
 };
+
+const toRecordingSummary = (r: Row): RecordingSummary => ({
+  id: String(r.id),
+  agentId: String(r.agent_id),
+  status: r.status as RecordingStatus,
+  name: String(r.name),
+  description: String(r.description),
+  startedBy: String(r.started_by),
+  startedAt: String(r.started_at),
+  stoppedAt: (r.stopped_at as string) ?? null,
+  updatedAt: String(r.updated_at),
+  actions: Number(r.actions ?? json<unknown[]>(r.log, []).length),
+  frames: Number(r.frame_count ?? json<unknown[]>(r.frames, []).length),
+  error: (r.error as string) ?? null,
+});
+const toRecording = (r: Row): Recording => ({
+  ...toRecordingSummary(r),
+  log: json<Recording['log']>(r.log, []),
+  frameList: json<Recording['frameList']>(r.frames, []),
+  draft: String(r.draft),
+  dropped: Number(r.dropped),
+});
+/** A recording's columns for listings: counts instead of the log and stills. */
+const RECORDING_SUMMARY_COLUMNS = `id, agent_id, status, name, description, started_by, started_at, stopped_at, updated_at, error,
+  json_array_length(log) AS actions, json_array_length(frames) AS frame_count`;
 
 const toRun = (r: Row): Run => ({
   id: String(r.id),
@@ -1203,6 +1252,52 @@ export class Store {
   }
   deleteComponent(name: string): boolean {
     return Number(this.run('DELETE FROM components WHERE name = :name', { name }).changes) > 0;
+  }
+
+  // ── recordings (learning by demonstration) ────────────────────────────
+  createRecording(input: Pick<Recording, 'agentId' | 'startedBy'>): Recording {
+    const t = now();
+    const id = newId('rec');
+    this.run(
+      `INSERT INTO recordings (id, agent_id, status, started_by, started_at, updated_at) VALUES (:id, :agentId, 'recording', :startedBy, :t, :t)`,
+      { id, ...input, t },
+    );
+    return this.getRecording(id)!;
+  }
+  getRecording(id: string): Recording | undefined {
+    const r = this.get('SELECT * FROM recordings WHERE id = :id', { id });
+    return r && toRecording(r);
+  }
+  listRecordings(opts: { agentId?: string; status?: RecordingStatus } = {}): RecordingSummary[] {
+    const where = [opts.agentId && 'agent_id = :agentId', opts.status && 'status = :status'].filter(Boolean);
+    return this.all(`SELECT ${RECORDING_SUMMARY_COLUMNS} FROM recordings ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC`, opts).map(
+      toRecordingSummary,
+    );
+  }
+  updateRecording(
+    id: string,
+    patch: Partial<Pick<Recording, 'status' | 'name' | 'description' | 'log' | 'frameList' | 'dropped' | 'draft' | 'error' | 'stoppedAt'>>,
+  ): Recording {
+    const cols: Record<string, string> = {
+      status: 'status',
+      name: 'name',
+      description: 'description',
+      log: 'log',
+      frameList: 'frames',
+      dropped: 'dropped',
+      draft: 'draft',
+      error: 'error',
+      stoppedAt: 'stopped_at',
+    };
+    // Fields left undefined keep their value; null clears one (the error).
+    const sets = Object.entries(patch)
+      .filter(([k, v]) => cols[k] && v !== undefined)
+      .map(([k]) => `${cols[k]} = :${k}`);
+    this.run(`UPDATE recordings SET ${[...sets, 'updated_at = :updatedAt'].join(', ')} WHERE id = :id`, { ...patch, id, updatedAt: now() });
+    return this.getRecording(id)!;
+  }
+  deleteRecording(id: string): boolean {
+    return Number(this.run('DELETE FROM recordings WHERE id = :id', { id }).changes) > 0;
   }
 
   // ── approvals ─────────────────────────────────────────────────────────
