@@ -12,6 +12,7 @@ import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
 import { ComponentError, DraftInput } from './components.js';
 import { PageConflict, PageError } from './pages.js';
+import { RecordingError } from './recordings.js';
 import { DEFAULT_POLICY_YAML } from './policy.js';
 import { CronScheduler, MAX_QUEUED_EVENTS, newHookToken, tokenMatches } from './runtime/cron.js';
 import { addAgent, nameTaken, removeAgent } from './runtime/agents.js';
@@ -144,8 +145,14 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     return !channel || workspace.canSee(channel, viewerId);
   };
   const runVisible = (runId: string | null | undefined, viewerId: string) => !runId || channelVisible(store.getRun(runId)?.channelId, viewerId);
+  /** In a team, news of a recording (what someone said they were doing) is for the person who made it and owners. */
+  const recordingNewsVisible = (e: EventRecord, viewerId: string) => {
+    if (!e.type.startsWith('recording.') || !app.auth.teamMode) return true;
+    const by = (e.data.recording as { startedBy?: string } | undefined)?.startedBy ?? (e.data.startedBy as string | undefined);
+    return !by || by === viewerId || store.getHuman(viewerId)?.role === 'owner';
+  };
   const visibleTo = (viewerId: string) => (e: EventRecord) =>
-    channelVisible(e.channelId, viewerId) && (e.channelId ? true : runVisible(e.runId, viewerId));
+    channelVisible(e.channelId, viewerId) && (e.channelId ? true : runVisible(e.runId, viewerId)) && recordingNewsVisible(e, viewerId);
 
   // ── team sign-in ─────────────────────────────────────────────────────
   const cookie = (req: FastifyRequest, name: string) => {
@@ -310,6 +317,7 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
       activeRuns: store.listRuns({ statuses: ACTIVE_RUN_STATUSES, limit: 200 }).filter((r) => channelVisible(r.channelId, me(req).id)),
       schedules: store.listSchedules().map(presentSchedule),
       skills: app.skills.list(),
+      recordings: store.listRecordings().filter((r) => app.recordings.visibleTo(r, me(req))),
       secrets: vault.agentNames(),
       pausedAll: runtime.pausedAll,
       health: await health(),
@@ -1101,6 +1109,78 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     app.skills.delete(req.params.name);
     bus.emit('skill.deleted', { actorId: me(req).id }, { name: req.params.name });
     return { ok: true };
+  });
+
+  // ── learning by demonstration ────────────────────────────────────────
+  // A person records a task on an agent's computer; the draft skill it becomes reaches no agent until a person saves
+  // it. In a team, a recording (what someone typed, their stills) is for the person who made it and owners only.
+  const recordingCall = async <T>(fn: () => T | Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof RecordingError) throw new HttpError(err.status, err.message);
+      throw err;
+    }
+  };
+  const recordingFor = (req: FastifyRequest, id: string) => {
+    const rec = store.getRecording(id);
+    if (!rec || !app.recordings.visibleTo(rec, me(req))) throw new HttpError(404, 'recording not found');
+    return rec;
+  };
+  server.post<{ Params: { id: string } }>('/api/agents/:id/recordings', async (req) => {
+    const agent = agentOr404(req.params.id);
+    return recordingCall(() => app.recordings.begin(agent, me(req)));
+  });
+  server.get('/api/recordings', async (req) => store.listRecordings().filter((r) => app.recordings.visibleTo(r, me(req))));
+  server.get<{ Params: { id: string } }>('/api/recordings/:id', async (req) => recordingFor(req, req.params.id));
+  server.post<{ Params: { id: string } }>('/api/recordings/:id/stop', async (req) => {
+    const input = parse(
+      z.object({
+        name: z
+          .string()
+          .trim()
+          .refine((v) => v === '' || SKILL_NAME_RE.test(v), 'Skill names use lowercase letters, numbers and hyphens (max 64)')
+          .optional(),
+        description: z.string().max(1000).optional(),
+      }),
+      req.body ?? {},
+    );
+    const rec = recordingFor(req, req.params.id);
+    return recordingCall(() => app.recordings.end(rec.id, me(req).id, input));
+  });
+  server.post<{ Params: { id: string } }>('/api/recordings/:id/draft', async (req) => {
+    const rec = recordingFor(req, req.params.id);
+    if (rec.status === 'drafting') throw new HttpError(409, 'The draft is already being written');
+    return recordingCall(() => {
+      app.recordings.checkDraftable(rec.id);
+      // Answer at once; the draft arrives as recording.updated.
+      void app.recordings.draft(rec.id, me(req).id).catch((err) => console.error(`drafting ${rec.id}: ${errorMessage(err)}`));
+      return store.getRecording(rec.id);
+    });
+  });
+  server.put<{ Params: { id: string } }>('/api/recordings/:id/draft', async (req) => {
+    const { content } = parse(z.object({ content: z.string().min(1).max(100_000) }), req.body);
+    const rec = recordingFor(req, req.params.id);
+    return recordingCall(() => app.recordings.editDraft(rec.id, content, me(req).id));
+  });
+  server.post<{ Params: { id: string } }>('/api/recordings/:id/save', async (req) => {
+    const { content, overwrite } = parse(z.object({ content: z.string().min(1).max(100_000), overwrite: z.boolean().default(false) }), req.body);
+    const rec = recordingFor(req, req.params.id);
+    return recordingCall(() => app.recordings.save(rec.id, content, me(req).id, { overwrite }));
+  });
+  server.delete<{ Params: { id: string } }>('/api/recordings/:id', async (req) => {
+    const rec = recordingFor(req, req.params.id);
+    await recordingCall(() => app.recordings.discard(rec.id, me(req).id));
+    return { ok: true };
+  });
+  server.get<{ Params: { id: string; file: string } }>('/api/recordings/:id/frames/:file', async (req, reply) => {
+    if (!/^\d{1,3}\.jpg$/.test(req.params.file)) throw new HttpError(400, 'bad still name');
+    const rec = recordingFor(req, req.params.id);
+    const file = app.recordings.frameFile(rec.id, req.params.file);
+    if (!file) throw new HttpError(404, 'still not found');
+    reply.header('content-type', 'image/jpeg');
+    reply.header('cache-control', 'private, max-age=86400');
+    return reply.send(fs.createReadStream(file));
   });
 
   // ── shared folder ────────────────────────────────────────────────────

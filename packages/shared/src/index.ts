@@ -667,6 +667,8 @@ export interface Bootstrap {
   activeRuns: Run[];
   schedules: Schedule[];
   skills: SkillSummary[];
+  /** Skill drafts from recordings this person may see (their own; an owner sees all). */
+  recordings: RecordingSummary[];
   secrets: string[];
   pausedAll: boolean;
   health: Health;

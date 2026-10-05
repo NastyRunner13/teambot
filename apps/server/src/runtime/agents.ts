@@ -35,6 +35,7 @@ export async function removeAgent(app: App, agent: Agent, actorId: string | null
   store.deleteAgent(agent.id);
   app.memory.remove(agent.name);
   app.snapshots.removeAll(agent.id);
+  app.recordings.removeAll(agent.id, actorId);
   await app.egress.close(agent.id);
   bus.emit('agent.deleted', { actorId, agentId: agent.id }, { agentId: agent.id });
   app.cron.reload();

@@ -3,8 +3,11 @@
 import type { Agent, Spend, SpendReport } from '@teambot/shared';
 import type { App } from '../app.js';
 
-/** Events that carry `costUsd` / `inputTokens` / `outputTokens` for a model call. */
-export const COST_EVENTS = ['llm.response', 'run.compacted', 'tool.reviewed'];
+/**
+ * Events that carry `costUsd` / `inputTokens` / `outputTokens` for a model call. `recording.drafted` (a skill drafted
+ * from a person's recording) has no agent in its scope: a person asked for it, so it counts toward the workspace only.
+ */
+export const COST_EVENTS = ['llm.response', 'run.compacted', 'tool.reviewed', 'recording.drafted'];
 
 export const startOfDay = (d = new Date()) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
 export const startOfMonth = (d = new Date()) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
@@ -30,13 +33,18 @@ export class Budgets {
     this.app.bus.emit('budget.updated', { actorId }, { workspaceDailyUsd: this.workspaceDailyUsd });
   }
 
+  /** Why nothing may call a model right now (the workspace's daily cap is spent), or null. */
+  workspaceBlocked(): string | null {
+    const workspace = this.workspaceDailyUsd;
+    if (workspace === null) return null;
+    const all = this.spend(startOfDay());
+    return all.usd >= workspace ? `the workspace's daily budget (${usd(all.usd)} of ${usd(workspace)} spent today)` : null;
+  }
+
   /** Why this agent may not call a model right now, or null when it may. */
   blocked(agent: Agent): string | null {
-    const workspace = this.workspaceDailyUsd;
-    if (workspace !== null) {
-      const all = this.spend(startOfDay());
-      if (all.usd >= workspace) return `the workspace's daily budget (${usd(all.usd)} of ${usd(workspace)} spent today)`;
-    }
+    const workspace = this.workspaceBlocked();
+    if (workspace) return workspace;
     const { dailyUsd, monthlyUsd, dailyTokens } = agent.budget;
     if (dailyUsd === null && monthlyUsd === null && dailyTokens === null) return null;
     const today = this.spend(startOfDay(), agent.id);
