@@ -1,8 +1,14 @@
 // Drives the Chromium window that is visible on the agent's desktop (and in the live view),
 // so a human can watch every step and take over at any time.
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page } from 'playwright-core';
+import { RECORD_BINDING, eventFromPage, muteInPage, recordInPage, type RecordedEvent } from './recorder.js';
 
 const CDP_URL = 'http://127.0.0.1:9222';
+/** Events kept between two collections; beyond it they are counted as dropped. */
+const MAX_BUFFERED_EVENTS = 2000;
+/** Everything a person can type into, covered over in recording screenshots. */
+const FIELDS_TO_MASK =
+  'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]):not([type=checkbox]):not([type=radio]), textarea, select, [contenteditable=""], [contenteditable="true"]';
 const MAX_ELEMENTS = 200;
 const MAX_TEXT = 6000;
 
@@ -128,9 +134,24 @@ function describeElement(at: number | null | { x: number; y: number }) {
   };
 }
 
+interface Recording {
+  id: string;
+  startedAt: number;
+  seq: number;
+  events: RecordedEvent[];
+  dropped: number;
+  /** The last address announced per tab, so a page that reloads or re-renders isn't announced twice. */
+  lastUrl: WeakMap<Page, string>;
+  /** Removes the listeners added for this recording. */
+  detach: (() => void)[];
+}
+
 export class BrowserController {
   private browser?: Browser;
   private active?: Page;
+  /** The recording binding is exposed once per browser connection. */
+  private bindingReady = false;
+  private recording: Recording | null = null;
 
   async ping(): Promise<boolean> {
     try {
@@ -150,6 +171,9 @@ export class BrowserController {
         this.browser.on('disconnected', () => {
           this.browser = undefined;
           this.active = undefined;
+          this.bindingReady = false;
+          // The pages went with the browser; a recording in progress keeps its events and stops listening.
+          if (this.recording) for (const off of this.recording.detach.splice(0)) off();
         });
         const ctx = this.browser.contexts()[0] ?? (await this.browser.newContext());
         ctx.on('page', (p) => {
@@ -214,6 +238,129 @@ export class BrowserController {
     // A tab in the background may never paint, so its capture would hang.
     await page.bringToFront().catch(() => undefined);
     const buf = await page.screenshot({ type: 'jpeg', quality: 80, scale: 'css', timeout: 20_000 });
+    const view = await page.evaluate(() => ({
+      title: document.title,
+      width: innerWidth,
+      height: innerHeight,
+      scrollY: Math.round(scrollY),
+      scrollHeight: document.documentElement.scrollHeight,
+    }));
+    return { image: buf.toString('base64'), mime: 'image/jpeg', url: page.url(), ...view };
+  }
+
+  /** The tab a person at the screen is looking at: the one whose document is visible. */
+  private async visiblePage(): Promise<Page | null> {
+    for (const p of (await this.context()).pages().filter((x) => !x.isClosed())) {
+      if (await p.evaluate(() => document.visibilityState === 'visible').catch(() => false)) return p;
+    }
+    return null;
+  }
+
+  // ── recording a demonstration ─────────────────────────────────────────
+  // While a person drives the computer, frames report their clicks, typing and keys through a binding, and computerd
+  // announces each page they open. The server collects the events every few seconds.
+
+  private push(event: Omit<RecordedEvent, 'seq' | 't'>) {
+    const rec = this.recording;
+    if (!rec) return;
+    if (rec.events.length >= MAX_BUFFERED_EVENTS) {
+      rec.dropped += 1;
+      return;
+    }
+    rec.seq += 1;
+    rec.events.push({ seq: rec.seq, t: Date.now() - rec.startedAt, ...event });
+  }
+
+  private async announce(page: Page) {
+    const rec = this.recording;
+    if (!rec || page.isClosed()) return;
+    const url = page.url();
+    if (!url || url === 'about:blank' || rec.lastUrl.get(page) === url) return;
+    rec.lastUrl.set(page, url);
+    this.push({ kind: 'navigate', url: url.slice(0, 2000), title: (await page.title().catch(() => '')).slice(0, 200) });
+  }
+
+  /** Switch the recorder on in a frame once its document has loaded, and announce the page when it is a tab's own. */
+  private async instrument(frame: Frame) {
+    await frame.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
+    if (!this.recording || frame.isDetached()) return;
+    await frame.evaluate(recordInPage, RECORD_BINDING).catch(() => undefined);
+    if (frame === frame.page().mainFrame()) await this.announce(frame.page());
+  }
+
+  private watch(page: Page, rec: Recording) {
+    const onNavigated = (frame: Frame) => void this.instrument(frame);
+    page.on('framenavigated', onNavigated);
+    rec.detach.push(() => page.off('framenavigated', onNavigated));
+    for (const frame of page.frames()) void this.instrument(frame);
+  }
+
+  async startRecording(id: string) {
+    if (!id) throw new Error('id is required');
+    const ctx = await this.context();
+    if (!this.bindingReady) {
+      await ctx
+        .exposeBinding(RECORD_BINDING, (source, payload: unknown) => {
+          const event = this.recording && source.page ? eventFromPage(payload, source.page.url()) : null;
+          if (event) this.push(event);
+        })
+        .catch((err: Error) => {
+          // Still registered from before (same connection): it is there, which is all that matters.
+          if (!/already registered/i.test(err.message)) throw err;
+        });
+      this.bindingReady = true;
+    }
+    if (this.recording) await this.stopRecording();
+    const rec: Recording = { id, startedAt: Date.now(), seq: 0, events: [], dropped: 0, lastUrl: new WeakMap(), detach: [] };
+    this.recording = rec;
+    const onPage = (page: Page) => this.watch(page, rec);
+    ctx.on('page', onPage);
+    rec.detach.push(() => ctx.off('page', onPage));
+    // The page the person is looking at comes first: the demonstration starts there.
+    const shown = await this.visiblePage();
+    if (shown) await this.announce(shown);
+    for (const page of ctx.pages().filter((p) => !p.isClosed())) {
+      // Tabs left open in the background weren't opened during the demonstration, so they aren't announced.
+      if (!rec.lastUrl.has(page)) rec.lastUrl.set(page, page.url());
+      this.watch(page, rec);
+    }
+    return { id, url: shown?.url() ?? null };
+  }
+
+  /** Hand over what was recorded since the last call. */
+  recordedEvents() {
+    const rec = this.recording;
+    if (!rec) return { id: null, recording: false, events: [], dropped: 0 };
+    const events = rec.events.splice(0);
+    const dropped = rec.dropped;
+    rec.dropped = 0;
+    return { id: rec.id, recording: true, events, dropped };
+  }
+
+  async stopRecording() {
+    const rec = this.recording;
+    if (!rec) return { id: null, events: [], dropped: 0 };
+    const out = this.recordedEvents();
+    this.recording = null;
+    for (const off of rec.detach.splice(0)) off();
+    if (this.browser?.isConnected()) {
+      for (const page of this.browser.contexts()[0]?.pages() ?? []) {
+        for (const frame of page.frames()) await frame.evaluate(muteInPage).catch(() => undefined);
+      }
+    }
+    return { id: rec.id, events: out.events, dropped: out.dropped };
+  }
+
+  /**
+   * A still of the tab the person is looking at, for a recording. Nothing is brought to the front (they are using the
+   * screen), and every field is covered over, so what was typed (passwords above all) never ends up in a picture.
+   * Null when no tab is showing.
+   */
+  async recordingScreenshot(): Promise<PageShot | null> {
+    const page = await this.visiblePage();
+    if (!page) return null;
+    const mask = page.frames().map((f) => f.locator(FIELDS_TO_MASK));
+    const buf = await page.screenshot({ type: 'jpeg', quality: 70, scale: 'css', timeout: 20_000, mask, maskColor: '#9aa0a6' });
     const view = await page.evaluate(() => ({
       title: document.title,
       width: innerWidth,
