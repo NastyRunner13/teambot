@@ -204,6 +204,8 @@ export interface PageSummary {
   updatedAt: string;
   /** Length of the content in characters. */
   size: number;
+  /** Comment threads on the page that nobody has resolved yet. */
+  openComments: number;
 }
 
 export interface Page extends PageSummary {
@@ -212,6 +214,59 @@ export interface Page extends PageSummary {
 
 export const MAX_PAGE_TITLE = 160;
 export const MAX_PAGE_CHARS = 100_000;
+
+/** The passage a comment is about: the text as it was quoted, where it started, and the page revision it was made on. */
+export interface CommentAnchor {
+  quote: string;
+  offset: number;
+  revision: number;
+}
+
+/**
+ * A comment on a page. A thread is a root comment (with the passage it is about and whether it is resolved) and its
+ * replies, oldest first. @mentioning an agent in one hands it the thread, and its reply lands there.
+ */
+export interface PageComment {
+  id: string;
+  pageId: string;
+  /** The thread's root comment; null for a root. */
+  threadId: string | null;
+  authorId: string;
+  body: string;
+  mentions: string[];
+  /** Roots only: the passage, or null for a comment on the whole page. */
+  anchor: CommentAnchor | null;
+  /** Roots only: the thread is settled. */
+  resolved: boolean;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  /** The agent run that wrote it, if an agent did. */
+  runId: string | null;
+  /** Agent hops away from a person (loop guard), as for messages. */
+  depth: number;
+  createdAt: string;
+}
+
+export interface CommentThread extends PageComment {
+  replies: PageComment[];
+}
+
+export const MAX_COMMENT_CHARS = 10_000;
+export const MAX_COMMENT_QUOTE = 1_000;
+
+/**
+ * Where a comment's passage is in the page now: the start of the occurrence nearest where it was quoted, or null when
+ * the passage was edited away (the comment is outdated, and still shown with the text it quoted).
+ */
+export function locateAnchor(content: string, anchor: Pick<CommentAnchor, 'quote' | 'offset'>): number | null {
+  if (!anchor.quote) return null;
+  let best: number | null = null;
+  for (let at = content.indexOf(anchor.quote); at !== -1; at = content.indexOf(anchor.quote, at + 1)) {
+    if (best === null || Math.abs(at - anchor.offset) < Math.abs(best - anchor.offset)) best = at;
+    else break; // occurrences only move further away from here on
+  }
+  return best;
+}
 
 export type RunStatus =
   | 'queued'
@@ -237,6 +292,8 @@ export interface InboxItem {
   channelId: string | null;
   /** Thread the item came from, so the agent answers in that thread. */
   threadId: string | null;
+  /** A page comment thread (its root comment) the item came from: the agent answers there, not in a channel. */
+  commentThreadId: string | null;
   depth: number;
   initiator: Initiator;
   /** From a read-only routine: the run may look but not change anything. */
@@ -262,6 +319,8 @@ export interface Handoff {
   /** Where the answer goes: the asking run's conversation. */
   originChannelId: string | null;
   originThreadId: string | null;
+  /** The page comment thread the asking run answers in, when it was asked from one. */
+  originCommentThreadId: string | null;
   depth: number;
   initiator: Initiator;
   readOnly: boolean;
@@ -288,9 +347,11 @@ export interface Run {
   id: string;
   agentId: string;
   status: RunStatus;
-  /** Conversation the run reports back to. */
+  /** Conversation the run reports back to. Null for a run that answers in a page comment thread. */
   channelId: string | null;
   threadId: string | null;
+  /** The page comment thread (its root comment) the run answers in, instead of a channel. */
+  commentThreadId: string | null;
   initiator: Initiator;
   /** Only tools that look (risk internal or read) may run. */
   readOnly: boolean;

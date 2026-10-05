@@ -32,7 +32,7 @@ export class Handoffs {
     return store.listHandoffs({ runId: run.id }).length + this.mentioned(run).size;
   }
 
-  /** Agents this run woke by @mentioning them in a group chat. */
+  /** Agents this run woke by @mentioning them in a group chat or a page comment. */
   mentioned(run: Run): Set<string> {
     const { store } = this.app;
     const ids = new Set<string>();
@@ -40,6 +40,7 @@ export class Handoffs {
       if (store.getChannel(m.channelId)?.kind !== 'channel') continue;
       for (const id of m.mentions) if (id !== run.agentId && store.getAgent(id)) ids.add(id);
     }
+    for (const c of store.listCommentsByRun(run.id)) for (const id of c.mentions) if (id !== run.agentId && store.getAgent(id)) ids.add(id);
     return ids;
   }
 
@@ -105,6 +106,7 @@ export class Handoffs {
         channelId: dm.id,
         originChannelId: run.channelId,
         originThreadId: run.threadId,
+        originCommentThreadId: run.commentThreadId,
         depth: message.depth,
         initiator: run.initiator,
         readOnly: run.readOnly,
@@ -216,6 +218,7 @@ export class Handoffs {
         text: `${workspace.memberName(h.toAgentId)} has reached ${theirs(reason)} while working on what you asked ("${clip(h.task, 160)}"). Its answer will come once the budget resets or is raised. Tell the person if they are waiting on it.`,
         channelId: origin.channelId,
         threadId: origin.threadId,
+        commentThreadId: origin.commentThreadId,
         depth: h.depth,
         initiator: h.initiator,
         readOnly: h.readOnly,
@@ -238,10 +241,14 @@ export class Handoffs {
     this.deliver(h.runId);
   }
 
-  /** Where the asker hears back: the conversation it asked from, or its chat with the owner if that is gone. */
-  private origin(h: Handoff): { channelId: string | null; threadId: string | null } {
+  /**
+   * Where the asker hears back: the conversation or page comment thread it asked from, or its chat with the owner if
+   * that is gone.
+   */
+  private origin(h: Handoff): { channelId: string | null; threadId: string | null; commentThreadId: string | null } {
+    if (h.originCommentThreadId && this.app.store.getComment(h.originCommentThreadId)) return { channelId: null, threadId: null, commentThreadId: h.originCommentThreadId };
     const channel = h.originChannelId ? this.app.store.getChannel(h.originChannelId) : undefined;
-    return channel ? { channelId: channel.id, threadId: h.originThreadId } : { channelId: null, threadId: null };
+    return channel ? { channelId: channel.id, threadId: h.originThreadId, commentThreadId: null } : { channelId: null, threadId: null, commentThreadId: null };
   }
 
   /** Once nothing a run asked is still open, its answers (and non-answers) go back where it asked, in one message. */
@@ -271,6 +278,7 @@ export class Handoffs {
         text: parts.join('\n\n'),
         channelId: origin.channelId,
         threadId: origin.threadId,
+        commentThreadId: origin.commentThreadId,
         depth: Math.max(...ready.map((h) => h.answerDepth ?? h.depth)),
         initiator: first.initiator,
         readOnly: first.readOnly,

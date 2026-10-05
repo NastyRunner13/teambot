@@ -17,9 +17,22 @@ let pendingKey = 0;
 
 /**
  * `draftKey`: the conversation (channel id) or thread (root id) this box writes in. Text an interface in it offers
- * (teambot.reply) lands here for the person to read, change and send.
+ * (teambot.reply) lands here for the person to read, change and send. `attach={false}` leaves out file attachments
+ * (page comments are text).
  */
-export function Composer({ placeholder, onSend, autoFocus, draftKey }: { placeholder: string; onSend: (text: string, attachments: string[]) => Promise<void>; autoFocus?: boolean; draftKey?: string }) {
+export function Composer({
+  placeholder,
+  onSend,
+  autoFocus,
+  draftKey,
+  attach: canAttach = true,
+}: {
+  placeholder: string;
+  onSend: (text: string, attachments: string[]) => Promise<void>;
+  autoFocus?: boolean;
+  draftKey?: string;
+  attach?: boolean;
+}) {
   const agents = useStore((s) => s.agents);
   const humans = useStore((s) => s.humans);
   const notify = useStore((s) => s.notify);
@@ -111,13 +124,13 @@ export function Composer({ placeholder, onSend, autoFocus, draftKey }: { placeho
     <div
       className="composer"
       onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('Files')) return;
+        if (!canAttach || !e.dataTransfer.types.includes('Files')) return;
         e.preventDefault();
         setDragging(true);
       }}
       onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setDragging(false)}
       onDrop={(e) => {
-        if (!e.dataTransfer.files.length) return;
+        if (!canAttach || !e.dataTransfer.files.length) return;
         e.preventDefault();
         setDragging(false);
         attach(e.dataTransfer.files);
@@ -149,10 +162,12 @@ export function Composer({ placeholder, onSend, autoFocus, draftKey }: { placeho
             ))}
           </div>
         )}
-        <div className="composer-row">
-          <button type="button" className="composer-attach" title="Attach files" aria-label="Attach files" onClick={() => picker.current?.click()}>
-            <Plus size={20} />
-          </button>
+        <div className={`composer-row ${canAttach ? '' : 'no-attach'}`}>
+          {canAttach && (
+            <button type="button" className="composer-attach" title="Attach files" aria-label="Attach files" onClick={() => picker.current?.click()}>
+              <Plus size={20} />
+            </button>
+          )}
           <input
             ref={picker}
             type="file"
@@ -169,7 +184,7 @@ export function Composer({ placeholder, onSend, autoFocus, draftKey }: { placeho
             value={text}
             autoFocus={autoFocus}
             placeholder={dragging ? 'Drop files to attach them' : placeholder}
-            aria-label="Message"
+            aria-label={canAttach ? 'Message' : placeholder}
             onChange={(e) => {
               setText(e.target.value);
               detect(e.target.value, e.target.selectionStart);
@@ -177,7 +192,7 @@ export function Composer({ placeholder, onSend, autoFocus, draftKey }: { placeho
               e.target.style.height = `${Math.min(e.target.scrollHeight, 240)}px`;
             }}
             onPaste={(e) => {
-              if (e.clipboardData.files.length) {
+              if (canAttach && e.clipboardData.files.length) {
                 e.preventDefault();
                 attach(e.clipboardData.files);
               }
