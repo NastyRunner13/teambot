@@ -28,6 +28,16 @@ export class FakeComputers implements ComputerProvider {
   images: Record<string, string | null | undefined> = {};
   /** The network each agent's computer was last given. */
   networks: Record<string, ComputerSpec['network']> = {};
+  /** Computers that aren't running (status reports them stopped). */
+  off = new Set<string>();
+  /**
+   * The browser recorder per agent: what a person did since the last collection (push events here), and the page a
+   * recording still shows (null: no tab is showing).
+   */
+  recorder: Record<string, { id: string | null; events: unknown[]; dropped: number }> = {};
+  stillUrl: string | null = 'https://expenses.example.com/new';
+  /** Set to make starting a recording fail. */
+  failRecordStart = false;
 
   async available() {
     return true;
@@ -36,7 +46,7 @@ export class FakeComputers implements ComputerProvider {
     return true;
   }
   async status(agentId: string): Promise<ComputerStatus> {
-    return { agentId, state: 'running' };
+    return { agentId, state: this.off.has(agentId) ? 'stopped' : 'running' };
   }
   async stop(agentId: string) {
     this.stopped.push(agentId);
@@ -100,13 +110,37 @@ export class FakeComputers implements ComputerProvider {
           return { exitCode: failed ? 1 : 0, stdout: `ran: ${body.command}`, stderr: failed ? 'something broke' : '', timedOut: false, truncated: false } as T;
         }
         if (p === '/fs/write') return { path: body.path, bytes: String(body.content).length } as T;
+        if (p.startsWith('/record/')) {
+          const rec = (self.recorder[agentId] ??= { id: null, events: [], dropped: 0 });
+          const drain = () => {
+            const out = { events: rec.events.splice(0), dropped: rec.dropped };
+            rec.dropped = 0;
+            return out;
+          };
+          if (p === '/record/start') {
+            if (self.failRecordStart) throw new Error('browser is not available');
+            Object.assign(rec, { id: String(body.id), events: [], dropped: 0 });
+            return { id: rec.id, url: self.stillUrl } as T;
+          }
+          if (p === '/record/events') return { id: rec.id, recording: !!rec.id, ...drain() } as T;
+          if (p === '/record/stop') {
+            const out = { id: rec.id, ...drain() };
+            rec.id = null;
+            return out as T;
+          }
+          if (p === '/record/screenshot') {
+            return (self.stillUrl ? { image: Buffer.from(`still of ${self.stillUrl}`).toString('base64'), mime: 'image/jpeg', url: self.stillUrl, title: 'Expenses' } : null) as T;
+          }
+        }
         return {} as T;
       },
     };
   }
 }
 
-export function testApp(opts: { maxAgentDepth?: number; telegram?: AppOverrides['telegram']; slack?: AppOverrides['slack']; telemetry?: AppOverrides['telemetry']; triggers?: AppOverrides['triggers'] } = {}) {
+export function testApp(
+  opts: { maxAgentDepth?: number; telegram?: AppOverrides['telegram']; slack?: AppOverrides['slack']; telemetry?: AppOverrides['telemetry']; triggers?: AppOverrides['triggers'] } = {},
+) {
   const models = new ScriptedProvider();
   const computers = new FakeComputers();
   const dataDir = path.join(os.tmpdir(), `teambot-test-${crypto.randomBytes(4).toString('hex')}`);
@@ -124,7 +158,17 @@ export function testApp(opts: { maxAgentDepth?: number; telegram?: AppOverrides[
     maxStepsPerRun: 20,
     maxAgentDepth: opts.maxAgentDepth ?? 6,
   });
-  const app = createApp(cfg, { models, computers, masterKey: crypto.randomBytes(32), telegram: opts.telegram, slack: opts.slack, telemetry: opts.telemetry, triggers: opts.triggers });
+  const app = createApp(cfg, {
+    models,
+    computers,
+    masterKey: crypto.randomBytes(32),
+    telegram: opts.telegram,
+    slack: opts.slack,
+    telemetry: opts.telemetry,
+    triggers: opts.triggers,
+    // Recordings are collected when a test asks (app.recordings.collect), not on a timer.
+    recordings: { pollMs: 0 },
+  });
   return { app, models, computers, owner: app.workspace.owner() };
 }
 
