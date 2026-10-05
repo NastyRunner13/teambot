@@ -7,11 +7,13 @@ import {
   type Approval,
   type Bootstrap,
   type Channel,
+  type CommentThread,
   type EventRecord,
   type Health,
   type Human,
   type McpServerStatus,
   type Message,
+  type PageComment,
   type PageSummary,
   type Run,
   type RunSummary,
@@ -83,6 +85,8 @@ interface State {
   toast: { text: string; kind: 'info' | 'error' } | null;
   /** Pages, most recently changed first: loaded when first needed (null until then), then kept live. */
   pages: PageSummary[] | null;
+  /** Comment threads per page id, oldest first: loaded when the page opens, then kept live. */
+  comments: Record<string, CommentThread[]>;
   /** The component library, loaded when first needed. */
   components: UiComponent[] | null;
   /** Text an interface offered for a message box (teambot.reply): for the composer of conversation or thread `key`. */
@@ -109,6 +113,9 @@ interface State {
   showFileDialog(path: string | null): void;
   notify(text: string, kind?: 'info' | 'error'): void;
   loadPages(): Promise<void>;
+  loadComments(pageId: string): Promise<void>;
+  /** A comment the server just saved (it also arrives as an event; adding it twice changes nothing). */
+  addComment(comment: PageComment): void;
   loadComponents(): Promise<void>;
   setComposerDraft(key: string, text: string): void;
 }
@@ -179,6 +186,7 @@ export const useStore = create<State>((set, get) => ({
   preview: null,
   toast: null,
   pages: null,
+  comments: {},
   components: null,
   composerDraft: null,
 
@@ -309,6 +317,15 @@ export const useStore = create<State>((set, get) => ({
     set({ pages });
   },
 
+  async loadComments(pageId) {
+    const threads = await api.get<CommentThread[]>(`/pages/${pageId}/comments`);
+    set((s) => ({ comments: { ...s.comments, [pageId]: threads } }));
+  },
+
+  addComment(comment) {
+    set((s) => (s.comments[comment.pageId] ? { comments: { ...s.comments, [comment.pageId]: withComment(s.comments[comment.pageId], comment) } } : {}));
+  },
+
   async loadComponents() {
     const components = await api.get<UiComponent[]>('/components');
     set({ components });
@@ -320,6 +337,23 @@ export const useStore = create<State>((set, get) => ({
 }));
 
 const byNewest = (a: PageSummary, b: PageSummary) => b.updatedAt.localeCompare(a.updatedAt);
+
+/** Threads with a new comment: a new thread at the end, or a reply at the end of its thread. Known ids are left alone. */
+function withComment(threads: CommentThread[], c: PageComment): CommentThread[] {
+  if (!c.threadId) return threads.some((t) => t.id === c.id) ? threads : [...threads, { ...c, replies: [] }];
+  return threads.map((t) => (t.id === c.threadId && !t.replies.some((r) => r.id === c.id) ? { ...t, replies: [...t.replies, c] } : t));
+}
+
+/** Threads with a comment changed (a root resolved or reopened), keeping its replies. */
+function withUpdated(threads: CommentThread[], c: PageComment): CommentThread[] {
+  return threads.map((t) => (t.id === c.id ? { ...c, replies: t.replies } : t));
+}
+
+/** Threads without a deleted comment: a root takes its thread with it. */
+function withoutComment(threads: CommentThread[], id: string, threadId: string | null): CommentThread[] {
+  if (!threadId) return threads.filter((t) => t.id !== id);
+  return threads.map((t) => (t.id === threadId ? { ...t, replies: t.replies.filter((r) => r.id !== id) } : t));
+}
 
 function connect() {
   socket = new WebSocket(wsUrl('/ws'));
@@ -424,6 +458,26 @@ function apply(e: EventRecord) {
     if (e.type === 'human.removed' && d.human) next.humans = s.humans.filter((h) => h.id !== d.human.id);
     if ((e.type === 'page.created' || e.type === 'page.updated') && d.page && s.pages) next.pages = upsert(s.pages, d.page as PageSummary).sort(byNewest);
     if (e.type === 'page.deleted' && s.pages) next.pages = s.pages.filter((p) => p.id !== d.id);
+    if (e.type === 'page.deleted' && s.comments[d.id]) {
+      const { [d.id as string]: _gone, ...comments } = s.comments;
+      next.comments = comments;
+    }
+    if (e.type.startsWith('page.comment.')) {
+      const pageId = (d.comment?.pageId ?? d.pageId) as string;
+      const threads = s.comments[pageId];
+      if (threads) {
+        const changed =
+          e.type === 'page.comment.created'
+            ? withComment(threads, d.comment as PageComment)
+            : e.type === 'page.comment.updated'
+              ? withUpdated(threads, d.comment as PageComment)
+              : e.type === 'page.comment.deleted'
+                ? withoutComment(threads, d.id as string, (d.threadId as string) ?? null)
+                : threads;
+        next.comments = { ...s.comments, [pageId]: changed };
+      }
+      if (s.pages && typeof d.openComments === 'number') next.pages = s.pages.map((p) => (p.id === pageId ? { ...p, openComments: d.openComments } : p));
+    }
     if (e.type === 'component.deleted' && s.components) next.components = s.components.filter((c) => c.name !== d.name);
     else if (e.type.startsWith('component.') && d.component && s.components) {
       const c = d.component as UiComponent;

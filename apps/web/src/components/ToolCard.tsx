@@ -18,6 +18,7 @@ import {
   LayoutTemplate,
   Loader2,
   MessageSquare,
+  MessagesSquare,
   Monitor,
   MousePointerClick,
   Plug,
@@ -124,6 +125,11 @@ function lookOf(c: ToolCall): Look {
   if (c.tool === 'create_page') return { icon: FileText, title: ['Creating a page', 'Created a page'], detail: str(a.title), page: pageLink };
   if (c.tool === 'edit_page') return { icon: FileText, title: ['Editing a page', 'Edited a page'], detail: pageLink?.title ?? str(a.page), page: pageLink };
   if (c.tool === 'propose_page') return { icon: FileText, title: ['A page for you to review', 'Saved a page you approved'], detail: str(a.title), page: pageLink };
+  if (c.tool === 'list_page_comments') return { icon: MessagesSquare, title: ['Reading comments on a page', 'Read comments on a page'], detail: pageLink?.title ?? str(a.page), page: pageLink };
+  if (c.tool === 'comment_on_page')
+    return { icon: MessagesSquare, title: a.reply_to ? ['Replying to a comment', 'Replied to a comment'] : ['Commenting on a page', 'Commented on a page'], detail: str(a.text), page: pageLink };
+  if (c.tool === 'resolve_comment')
+    return { icon: MessagesSquare, title: a.resolved === false ? ['Reopening a comment thread', 'Reopened a comment thread'] : ['Resolving a comment thread', 'Resolved a comment thread'], detail: pageLink?.title, page: pageLink };
   if (c.tool === 'show_ui' || c.tool.startsWith('ui_')) return { icon: LayoutTemplate, title: ['Drawing', 'Showed'], detail: str(a.title) ?? c.summary.replace(/^Show /, '') };
   if (c.tool === 'draft_component') return { icon: LayoutTemplate, title: ['Drafting a component', 'Drafted a component'], detail: str(a.name) && `ui_${str(a.name)}`, mono: true };
   if (c.tool === 'ask_agent' || c.tool === 'send_dm' || c.tool === 'post_message' || c.tool === 'read_channel') return { icon: MessageSquare, title: [c.summary, c.summary] };

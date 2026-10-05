@@ -7,7 +7,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ACTIVE_RUN_STATUSES, MAX_PAGE_CHARS, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
+import { ACTIVE_RUN_STATUSES, MAX_COMMENT_CHARS, MAX_COMMENT_QUOTE, MAX_PAGE_CHARS, NO_BUDGET, OPEN_NETWORK, type Agent, type Bootstrap, type EventRecord, type Health, type Human, type LibraryItem, type Message, type Schedule, type WsFrame } from '@teambot/shared';
 import type { App } from './app.js';
 import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_S } from './auth.js';
 import { ComponentError, DraftInput } from './components.js';
@@ -1001,6 +1001,39 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
   });
   server.delete<{ Params: { id: string } }>('/api/pages/:id', async (req) => {
     pageCall(() => app.pages.remove(req.params.id, me(req).id));
+    return { ok: true };
+  });
+
+  // Comment threads on a page, open to everyone like the page. Anyone can comment, reply, resolve and reopen; only a
+  // comment's author or an owner deletes it. An @mentioned agent answers in the thread.
+  const commentOn = (pageId: string, commentId: string) => {
+    const comment = app.comments.get(commentId);
+    if (comment.pageId !== pageId) throw new HttpError(404, 'comment not found');
+    return comment;
+  };
+  server.get<{ Params: { id: string } }>('/api/pages/:id/comments', async (req) =>
+    pageCall(() => {
+      app.pages.get(req.params.id);
+      return app.comments.threads(req.params.id);
+    }),
+  );
+  server.post<{ Params: { id: string } }>('/api/pages/:id/comments', async (req) => {
+    const input = parse(
+      z.object({
+        body: z.string().max(MAX_COMMENT_CHARS),
+        threadId: z.string().optional(),
+        anchor: z.object({ quote: z.string().min(1).max(MAX_COMMENT_QUOTE), offset: z.number().int().min(0) }).optional(),
+      }),
+      req.body,
+    );
+    return pageCall(() => app.comments.post({ pageId: req.params.id, authorId: me(req).id, body: input.body, threadId: input.threadId, anchor: input.anchor }));
+  });
+  server.patch<{ Params: { id: string; commentId: string } }>('/api/pages/:id/comments/:commentId', async (req) => {
+    const { resolved } = parse(z.object({ resolved: z.boolean() }), req.body);
+    return pageCall(() => app.comments.resolve(commentOn(req.params.id, req.params.commentId).id, resolved, me(req).id));
+  });
+  server.delete<{ Params: { id: string; commentId: string } }>('/api/pages/:id/comments/:commentId', async (req) => {
+    pageCall(() => app.comments.remove(commentOn(req.params.id, req.params.commentId).id, me(req).id));
     return { ok: true };
   });
 

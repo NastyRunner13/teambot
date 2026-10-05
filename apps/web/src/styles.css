@@ -466,6 +466,7 @@ button.sent-note:hover { background: var(--panel-2); }
 .composer-row { display: flex; align-items: flex-end; gap: 4px; padding: 7px 8px; }
 .composer-attach { display: grid; place-items: center; flex: none; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
 .composer-attach:hover { background: var(--panel-3); color: var(--text); }
+.composer-row.no-attach { padding-left: 14px; }
 .composer textarea { flex: 1; min-width: 0; min-height: 38px; max-height: 240px; padding: 8px 4px; border: 0; outline: none; resize: none; background: transparent; font-size: 15px; line-height: 1.5; }
 .send-button { display: grid; place-items: center; flex: none; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--on-accent); cursor: pointer; transition: background-color 140ms ease-out; }
 .send-button:disabled { background: var(--panel-3); color: var(--faint); cursor: default; }
@@ -983,6 +984,38 @@ fieldset.owner-only { min-width: 0; margin: 0; padding: 0; border: 0; }
 .doc-assistant .messages-inner { padding: 0 14px; }
 .doc-agent-select { flex: 1; height: 36px; padding: 0 12px; border-radius: 999px; }
 .doc-assistant-empty { margin: 24px 6px; text-align: center; line-height: 1.6; }
+.page-row-comments { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.doc-column { position: relative; }
+/* Offered beside a selection, in the column's margin. */
+.doc-comment-button { position: absolute; right: 2px; z-index: 2; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--elevated); color: var(--text); box-shadow: var(--shadow); cursor: pointer; animation: doc-comment-in 120ms ease-out; }
+.doc-comment-button:hover { background: var(--panel-3); }
+.doc-comment-button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@keyframes doc-comment-in { from { opacity: 0; transform: scale(0.9); } }
+
+/* ── page comments ──────────────────────────────────────────────────── */
+.doc-comments .panel-bar { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.comment-list { display: flex; flex-direction: column; gap: 12px; padding: 14px 14px 20px; }
+.comment-empty { margin: 18px 4px; line-height: 1.6; text-align: center; }
+.comment-thread { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); transition: border-color 140ms ease-out; }
+.comment-thread.active { border-color: color-mix(in srgb, var(--muted) 70%, var(--border-strong)); }
+.comment-thread.resolved .comment-body { color: var(--muted); }
+.comment-quote { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 2px 0 2px 10px; border: 0; border-left: 3px solid var(--border-strong); background: none; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: left; cursor: pointer; }
+.comment-quote:hover { border-left-color: var(--muted); color: var(--text); }
+.comment-quote-text { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.comment-scope { padding-left: 2px; }
+.comment { display: flex; flex-direction: column; gap: 4px; }
+.comment-head { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; }
+.comment-head .menu-trigger { width: 24px; height: 24px; }
+.comment-body { padding-left: 27px; font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.comment-body .md p { margin-bottom: 6px; }
+.comment-working { display: flex; align-items: center; gap: 7px; }
+.comment-resolved-by { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+.comment-actions { display: flex; gap: 4px; margin: 0 -6px -4px; }
+.comment-thread .composer { max-width: none; padding: 0; }
+.comment-thread .approval { margin: 0; }
+.comment-new { flex-shrink: 0; border-top: 1px solid var(--border); padding-top: 8px; }
+.comment-draft-quote { display: flex; align-items: center; gap: 6px; margin: 0 14px 2px; padding: 4px 4px 4px 10px; border-left: 3px solid var(--muted); color: var(--muted); font-size: 12.5px; }
+.comment-draft-quote .ellipsis { flex: 1; min-width: 0; }
 
 /* ── components playground ──────────────────────────────────────────── */
 .playground-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }

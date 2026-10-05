@@ -234,10 +234,12 @@ Don't run it again just to see the result; check the current state instead.`
       const pending = store.pendingInbox(agent.id);
       if (!pending.length || this.app.budgets.blocked(agent)) continue;
       const first = pending[0];
+      // A run answers in one place: a page comment thread, or a conversation (its chat with the owner by default).
       const run = store.createRun({
         agentId: agent.id,
-        channelId: first.channelId ?? this.app.workspace.getOrCreateDm(this.app.workspace.owner().id, agent.id).id,
+        channelId: first.commentThreadId ? null : (first.channelId ?? this.app.workspace.getOrCreateDm(this.app.workspace.owner().id, agent.id).id),
         threadId: first.channelId ? first.threadId : null,
+        commentThreadId: first.commentThreadId,
         initiator: first.initiator,
         readOnly: first.readOnly,
         depth: first.depth,
@@ -306,12 +308,13 @@ Don't run it again just to see the result; check the current state instead.`
   }
 
   /**
-   * Whether a run may take in an inbox item: the same channel and thread, and the same read-only state. Notes from
-   * TeamBot itself about the agent's own computer (a hand-back) go to whichever run comes next.
+   * Whether a run may take in an inbox item: the same channel and thread (or page comment thread), and the same
+   * read-only state. Notes from TeamBot itself about the agent's own computer (a hand-back) go to whichever run comes next.
    */
   private belongsTo(run: Run, item: InboxItem): boolean {
     if (item.readOnly !== run.readOnly) return false;
-    if (item.kind === 'system' && !item.channelId) return true;
+    if (item.kind === 'system' && !item.channelId && !item.commentThreadId) return true;
+    if (item.commentThreadId || run.commentThreadId) return item.commentThreadId === run.commentThreadId;
     const channelId = item.channelId ?? this.app.workspace.getOrCreateDm(this.app.workspace.owner().id, run.agentId).id;
     return channelId === run.channelId && (item.channelId ? item.threadId : null) === run.threadId;
   }
@@ -324,7 +327,7 @@ Don't run it again just to see the result; check the current state instead.`
     const { store } = this.app;
     const previous = store
       .listRuns({ agentId: run.agentId, channelId: run.channelId ?? undefined, limit: 20 })
-      .find((r) => r.id !== run.id && r.threadId === run.threadId && r.readOnly === run.readOnly);
+      .find((r) => r.id !== run.id && r.channelId === run.channelId && r.threadId === run.threadId && r.commentThreadId === run.commentThreadId && r.readOnly === run.readOnly);
     if (previous?.status !== 'completed') return undefined;
     const transcript = store.getTranscript<TranscriptMessage>(previous.id);
     return finished(transcript) ? undefined : { run: previous, transcript };
@@ -338,8 +341,22 @@ Don't run it again just to see the result; check the current state instead.`
     }
   }
 
-  /** Post as the run's agent in its conversation, or in `elsewhere` (a top-level message there). */
+  /**
+   * Post as the run's agent in its conversation (a reply in its page comment thread, for a run asked from one), or in
+   * `elsewhere` (a top-level message there).
+   */
   private say(run: Run, text: string, route = true, elsewhere?: string) {
+    const actor = { id: run.agentId, depth: run.depth, initiator: run.initiator, runId: run.id };
+    if (run.commentThreadId && !elsewhere) {
+      try {
+        this.app.comments.post({ threadId: run.commentThreadId, authorId: run.agentId, body: text, actor, route });
+        return;
+      } catch (err) {
+        // The thread or its page was deleted meanwhile: the reply goes to the agent's chat with the owner instead.
+        console.error('could not post agent comment', err);
+        text = `(The page comment thread I was answering is gone, so I'm replying here.)\n\n${text}`;
+      }
+    }
     const channelId = elsewhere ?? run.channelId ?? this.app.workspace.getOrCreateDm(this.app.workspace.owner().id, run.agentId).id;
     try {
       this.app.workspace.postMessage({
@@ -347,7 +364,7 @@ Don't run it again just to see the result; check the current state instead.`
         threadId: run.channelId && !elsewhere ? run.threadId : null,
         authorId: run.agentId,
         text,
-        actor: { id: run.agentId, depth: run.depth, initiator: run.initiator, runId: run.id },
+        actor,
         route,
       });
     } catch (err) {

@@ -1,6 +1,7 @@
 import { PROGRESS_TOOL, type Agent, type InboxItem, type Run } from '@teambot/shared';
 import type { App } from '../app.js';
 import { availableCodingAgents } from '../tools/coding-tools.js';
+import { pageLink } from '../tools/page-tools.js';
 
 /** Rebuilt before every model call so the roster, skills and secrets are always current. */
 export function buildSystemPrompt(app: App, agent: Agent, run: Run): string {
@@ -9,6 +10,13 @@ export function buildSystemPrompt(app: App, agent: Agent, run: Run): string {
   const humans = app.store.listHumans();
   const channels = app.store.listChannels().filter((c) => c.kind === 'channel');
   const replyTo = run.channelId ? app.store.getChannel(run.channelId) : undefined;
+  const thread = run.commentThreadId ? app.store.getComment(run.commentThreadId) : undefined;
+  const threadPage = thread && app.store.getPage(thread.pageId);
+  const postedTo = replyTo
+    ? `${ws.channelLabel(replyTo, agent.id)}${run.threadId ? ' (in the thread you were asked from)' : ''}`
+    : threadPage
+      ? `the comment thread on the page ${pageLink(threadPage)} you were asked from`
+      : 'the conversation you were asked from';
   // In a DM with another agent, this run is working for that agent.
   const forAgent = replyTo?.kind === 'dm' ? agents.find((a) => a.id !== agent.id && replyTo.memberIds.includes(a.id)) : undefined;
 
@@ -48,9 +56,10 @@ Channels: ${channels.map((c) => `#${c.name}${c.memberIds.includes(agent.id) ? ''
 - For Word, Excel, PowerPoint and PDF files, write a Python script on your computer: python-docx, openpyxl, python-pptx, reportlab and matplotlib are installed, and pandoc converts Markdown to .docx.
 - One reply has an output limit, so write a long file in parts: the first with write_file, then the rest with append: true.
 - Talk to people only through tools: post_message for channels, send_dm to message a person directly, and ask_agent to hand a teammate agent work. Writing @Name in a channel message wakes that teammate up and hands them your message — only mention someone when you need them to act, and never mention yourself.
-- When you are done, end with a short final reply. It is posted automatically to ${replyTo ? `${ws.channelLabel(replyTo, agent.id)}${run.threadId ? ' (in the thread you were asked from)' : ''}` : 'the conversation you were asked from'}.${forAgent ? ` You are working for ${forAgent.name} here, so that reply is your answer to them: make it complete.` : ''} If there is nothing useful to say (for example you were only cc'd), reply with exactly [silent].
+- When you are done, end with a short final reply. It is posted automatically to ${postedTo}.${forAgent ? ` You are working for ${forAgent.name} here, so that reply is your answer to them: make it complete.` : ''} If there is nothing useful to say (for example you were only cc'd), reply with exactly [silent].
 - To hand someone a file in another conversation, put it in /shared and attach it to your message (the attachments argument of post_message, send_dm or ask_agent), or name its path there.
 - Pages are the team's shared documents (Markdown), which people and agents edit together: list_pages, read_page, create_page and edit_page. A link like /pages/page_… is a page; read it with read_page. An edit names the revision you read, so if someone saved in between, read the page again and redo your change on top of theirs. When someone wants to look a document over before it is kept, use propose_page: they approve the draft in the chat, and only then is it saved.
+- People and agents discuss pages in comment threads, each about a passage of the page or the page as a whole. list_page_comments reads them, comment_on_page starts a thread or replies in one (writing @Name there wakes that teammate, as in a channel), and resolve_comment settles a thread once it is dealt with. When you are asked in a thread, your final reply is posted there, so don't also comment it yourself.
 ${drawing}- For a job with several steps, write your plan with ${PROGRESS_TOOL} before you start and keep it current: the step you are on in_progress, each finished step done, and the list changed when the plan does. The person you work for watches it to follow along. Skip it for quick answers.
 - Work independently by default: do your own research, reasoning and execution with your tools, even when the job has several independent parts.
 - Ask an existing agent for help only when its stated role in the Team roster shows a specific specialty relevant to the task. Do not involve other agents for routine work you can handle, just because they are available, or just to split work in parallel. If no specialty fits, do the work yourself.
@@ -90,7 +99,20 @@ function recentWork(app: App, agent: Agent, run: Run): string {
   const jobs: string[] = [];
   for (const r of app.store.listRuns({ agentId: agent.id, limit: 30 })) {
     if (jobs.length >= RECENT_JOBS) break;
-    if (r.id === run.id || !r.channelId || r.channelId === run.channelId) continue;
+    if (r.id === run.id) continue;
+    if (r.commentThreadId) {
+      // A job in a page comment thread: pages and their comments are open to everyone in the workspace.
+      if (r.commentThreadId === run.commentThreadId) continue;
+      const root = app.store.getComment(r.commentThreadId);
+      const page = root && app.store.getPage(root.pageId);
+      if (!page) continue;
+      const reply = app.store.listCommentsByRun(r.id).at(-1);
+      const ended =
+        r.status === 'failed' ? `failed${r.error ? ` (${flat(r.error, 120)})` : ''}` : r.status === 'cancelled' ? 'a person stopped it' : reply ? `you replied "${flat(reply.body, 280)}"` : 'you posted no reply';
+      jobs.push(`- ${r.createdAt.slice(0, 16).replace('T', ' ')} UTC, a comment thread on the page ${pageLink(page)}: "${flat(r.title, 140)}" → ${ended}`);
+      continue;
+    }
+    if (!r.channelId || r.channelId === run.channelId) continue;
     const channel = app.store.getChannel(r.channelId);
     if (!channel || !ws.canSeeFrom(channel, agent.id, run.channelId)) continue;
     const posted = app.store.listMessagesByRun(r.id);
@@ -114,6 +136,10 @@ ${jobs.join('\n')}
 export function formatInbox(app: App, agent: Agent, items: InboxItem[], firstInRun: boolean, withHistory = firstInRun): string {
   const ws = app.workspace;
   const parts: string[] = [];
+
+  // Asked in a page comment thread: the page, the passage and the thread so far.
+  const thread = withHistory ? app.comments.context(items) : null;
+  if (thread) parts.push(thread);
 
   if (withHistory) {
     const first = items.find((i) => i.kind === 'message' && i.channelId);

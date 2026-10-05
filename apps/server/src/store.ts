@@ -20,6 +20,7 @@ import {
   type InboxItem,
   type Message,
   type Page,
+  type PageComment,
   type PageSummary,
   type Run,
   type RunStatus,
@@ -282,6 +283,33 @@ export const MIGRATIONS: string[] = [
   );
   ALTER TABLE messages ADD COLUMN widget TEXT;
   `,
+  // 20: comment threads on pages, anchored to a passage (the quoted text, where it was and on which revision). An agent
+  // @mentioned in one answers in that thread: its inbox items, runs and the requests it hands on remember the thread.
+  `
+  CREATE TABLE page_comments (
+    id TEXT PRIMARY KEY,
+    page_id TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    thread_id TEXT REFERENCES page_comments(id) ON DELETE CASCADE,
+    author_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    mentions TEXT NOT NULL DEFAULT '[]',
+    anchor_quote TEXT,
+    anchor_offset INTEGER,
+    anchor_revision INTEGER,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    resolved_by TEXT,
+    resolved_at TEXT,
+    run_id TEXT,
+    depth INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX page_comments_by_page ON page_comments (page_id, created_at);
+  CREATE INDEX page_comments_by_thread ON page_comments (thread_id, created_at);
+  CREATE INDEX page_comments_by_run ON page_comments (run_id);
+  ALTER TABLE runs ADD COLUMN comment_thread_id TEXT;
+  ALTER TABLE inbox ADD COLUMN comment_thread_id TEXT;
+  ALTER TABLE handoffs ADD COLUMN origin_comment_thread_id TEXT;
+  `,
 ];
 
 type Row = Record<string, SQLInputValue>;
@@ -381,8 +409,28 @@ const toPageSummary = (r: Row): PageSummary => ({
   createdAt: String(r.created_at),
   updatedAt: String(r.updated_at),
   size: Number(r.size ?? String(r.content ?? '').length),
+  openComments: Number(r.open_comments ?? 0),
 });
 const toPage = (r: Row): Page => ({ ...toPageSummary(r), content: String(r.content) });
+/** A page's columns for listings (no content), with its count of unresolved comment threads. */
+const PAGE_SUMMARY_COLUMNS = `id, title, revision, created_by, updated_by, created_at, updated_at, length(content) AS size,
+  (SELECT COUNT(*) FROM page_comments c WHERE c.page_id = pages.id AND c.thread_id IS NULL AND c.resolved = 0) AS open_comments`;
+
+const toComment = (r: Row): PageComment => ({
+  id: String(r.id),
+  pageId: String(r.page_id),
+  threadId: (r.thread_id as string) ?? null,
+  authorId: String(r.author_id),
+  body: String(r.body),
+  mentions: json<string[]>(r.mentions, []),
+  anchor: r.anchor_quote === null || r.anchor_quote === undefined ? null : { quote: String(r.anchor_quote), offset: Number(r.anchor_offset), revision: Number(r.anchor_revision) },
+  resolved: Number(r.resolved) === 1,
+  resolvedBy: (r.resolved_by as string) ?? null,
+  resolvedAt: (r.resolved_at as string) ?? null,
+  runId: (r.run_id as string) ?? null,
+  depth: Number(r.depth),
+  createdAt: String(r.created_at),
+});
 
 const toComponent = (r: Row): UiComponent => {
   const draft = json<UiComponent['draft']>(r.draft, { description: '', html: '', css: '', js: '', argsSchema: { type: 'object', properties: {} }, sampleArgs: {} });
@@ -409,6 +457,7 @@ const toRun = (r: Row): Run => ({
   status: r.status as RunStatus,
   channelId: (r.channel_id as string) ?? null,
   threadId: (r.thread_id as string) ?? null,
+  commentThreadId: (r.comment_thread_id as string) ?? null,
   initiator: r.initiator as Run['initiator'],
   readOnly: Number(r.read_only) === 1,
   depth: Number(r.depth),
@@ -430,6 +479,7 @@ const toInbox = (r: Row): InboxItem => ({
   text: String(r.text),
   channelId: (r.channel_id as string) ?? null,
   threadId: (r.thread_id as string) ?? null,
+  commentThreadId: (r.comment_thread_id as string) ?? null,
   depth: Number(r.depth),
   initiator: r.initiator as InboxItem['initiator'],
   readOnly: Number(r.read_only) === 1,
@@ -445,6 +495,7 @@ const toHandoff = (r: Row): Handoff => ({
   channelId: String(r.channel_id),
   originChannelId: (r.origin_channel_id as string) ?? null,
   originThreadId: (r.origin_thread_id as string) ?? null,
+  originCommentThreadId: (r.origin_comment_thread_id as string) ?? null,
   depth: Number(r.depth),
   initiator: r.initiator as Handoff['initiator'],
   readOnly: Number(r.read_only) === 1,
@@ -878,11 +929,12 @@ export class Store {
   }
 
   // ── runs ──────────────────────────────────────────────────────────────
-  createRun(input: Pick<Run, 'agentId' | 'channelId' | 'initiator' | 'depth' | 'title'> & { threadId?: string | null; readOnly?: boolean }): Run {
+  createRun(input: Pick<Run, 'agentId' | 'channelId' | 'initiator' | 'depth' | 'title'> & { threadId?: string | null; commentThreadId?: string | null; readOnly?: boolean }): Run {
     const t = now();
     const run: Run = {
       ...input,
       threadId: input.threadId ?? null,
+      commentThreadId: input.commentThreadId ?? null,
       readOnly: input.readOnly ?? false,
       id: newId('run'),
       status: 'queued',
@@ -897,8 +949,8 @@ export class Store {
     };
     this.tx(() => {
       this.run(
-        `INSERT INTO runs (id, agent_id, status, channel_id, thread_id, initiator, read_only, depth, title, steps, tokens_in, tokens_out, cost_usd, error, created_at, updated_at)
-         VALUES (:id, :agentId, :status, :channelId, :threadId, :initiator, :readOnly, :depth, :title, :steps, :tokensIn, :tokensOut, :costUsd, :error, :createdAt, :updatedAt)`,
+        `INSERT INTO runs (id, agent_id, status, channel_id, thread_id, comment_thread_id, initiator, read_only, depth, title, steps, tokens_in, tokens_out, cost_usd, error, created_at, updated_at)
+         VALUES (:id, :agentId, :status, :channelId, :threadId, :commentThreadId, :initiator, :readOnly, :depth, :title, :steps, :tokensIn, :tokensOut, :costUsd, :error, :createdAt, :updatedAt)`,
         run as unknown as Record<string, unknown>,
       );
       this.run('INSERT INTO run_transcripts (run_id, transcript) VALUES (:id, :t)', { id: run.id, t: '[]' });
@@ -914,7 +966,7 @@ export class Store {
     if (!cur) throw new Error(`run ${id} not found`);
     const next: Run = { ...cur, ...patch, updatedAt: now() };
     this.run(
-      `UPDATE runs SET status = :status, channel_id = :channelId, thread_id = :threadId, initiator = :initiator, read_only = :readOnly, depth = :depth, title = :title, steps = :steps,
+      `UPDATE runs SET status = :status, channel_id = :channelId, thread_id = :threadId, comment_thread_id = :commentThreadId, initiator = :initiator, read_only = :readOnly, depth = :depth, title = :title, steps = :steps,
        tokens_in = :tokensIn, tokens_out = :tokensOut, cost_usd = :costUsd, error = :error, progress = :progress, updated_at = :updatedAt WHERE id = :id`,
       next as unknown as Record<string, unknown>,
     );
@@ -950,11 +1002,21 @@ export class Store {
   }
 
   // ── inbox ─────────────────────────────────────────────────────────────
-  addInbox(input: Omit<InboxItem, 'id' | 'createdAt' | 'runId' | 'threadId' | 'readOnly'> & { threadId?: string | null; readOnly?: boolean }): InboxItem {
-    const item: InboxItem = { ...input, threadId: input.threadId ?? null, readOnly: input.readOnly ?? false, id: newId('inb'), createdAt: now(), runId: null };
+  addInbox(
+    input: Omit<InboxItem, 'id' | 'createdAt' | 'runId' | 'threadId' | 'commentThreadId' | 'readOnly'> & { threadId?: string | null; commentThreadId?: string | null; readOnly?: boolean },
+  ): InboxItem {
+    const item: InboxItem = {
+      ...input,
+      threadId: input.threadId ?? null,
+      commentThreadId: input.commentThreadId ?? null,
+      readOnly: input.readOnly ?? false,
+      id: newId('inb'),
+      createdAt: now(),
+      runId: null,
+    };
     this.run(
-      `INSERT INTO inbox (id, agent_id, kind, text, channel_id, thread_id, depth, initiator, read_only, created_at, run_id)
-       VALUES (:id, :agentId, :kind, :text, :channelId, :threadId, :depth, :initiator, :readOnly, :createdAt, :runId)`,
+      `INSERT INTO inbox (id, agent_id, kind, text, channel_id, thread_id, comment_thread_id, depth, initiator, read_only, created_at, run_id)
+       VALUES (:id, :agentId, :kind, :text, :channelId, :threadId, :commentThreadId, :depth, :initiator, :readOnly, :createdAt, :runId)`,
       item as unknown as Record<string, unknown>,
     );
     return item;
@@ -970,8 +1032,8 @@ export class Store {
   createHandoff(input: Omit<Handoff, 'id' | 'status' | 'outcome' | 'answerId' | 'answerDepth' | 'delivered' | 'delayNoted' | 'createdAt' | 'settledAt'>): Handoff {
     const h: Handoff = { ...input, id: newId('hnd'), status: 'open', outcome: null, answerId: null, answerDepth: null, delivered: false, delayNoted: false, createdAt: now(), settledAt: null };
     this.run(
-      `INSERT INTO handoffs (id, run_id, from_agent_id, to_agent_id, channel_id, origin_channel_id, origin_thread_id, depth, initiator, read_only, task, status, created_at)
-       VALUES (:id, :runId, :fromAgentId, :toAgentId, :channelId, :originChannelId, :originThreadId, :depth, :initiator, :readOnly, :task, :status, :createdAt)`,
+      `INSERT INTO handoffs (id, run_id, from_agent_id, to_agent_id, channel_id, origin_channel_id, origin_thread_id, origin_comment_thread_id, depth, initiator, read_only, task, status, created_at)
+       VALUES (:id, :runId, :fromAgentId, :toAgentId, :channelId, :originChannelId, :originThreadId, :originCommentThreadId, :depth, :initiator, :readOnly, :task, :status, :createdAt)`,
       h as unknown as Record<string, unknown>,
     );
     return h;
@@ -1022,11 +1084,11 @@ export class Store {
   /** Every page, most recently changed first, without content. */
   listPages(): PageSummary[] {
     return this.all(
-      `SELECT id, title, revision, created_by, updated_by, created_at, updated_at, length(content) AS size FROM pages ORDER BY updated_at DESC, rowid DESC`,
+      `SELECT ${PAGE_SUMMARY_COLUMNS} FROM pages ORDER BY updated_at DESC, rowid DESC`,
     ).map(toPageSummary);
   }
   getPage(id: string): Page | undefined {
-    const r = this.get('SELECT * FROM pages WHERE id = :id', { id });
+    const r = this.get(`SELECT *, ${PAGE_SUMMARY_COLUMNS} FROM pages WHERE id = :id`, { id });
     return r && toPage(r);
   }
   /** Pages whose title or text contains every term (case-insensitive), most recently changed first. */
@@ -1035,7 +1097,7 @@ export class Store {
     const p: Record<string, unknown> = { limit };
     terms.forEach((t, i) => (p[`q${i}`] = `%${likeEscape(t)}%`));
     return this.all(
-      `SELECT id, title, revision, created_by, updated_by, created_at, updated_at, length(content) AS size FROM pages
+      `SELECT ${PAGE_SUMMARY_COLUMNS} FROM pages
        WHERE ${terms.map((_, i) => `(title LIKE :q${i} ESCAPE '\\' OR content LIKE :q${i} ESCAPE '\\')`).join(' AND ')}
        ORDER BY updated_at DESC LIMIT :limit`,
       p,
@@ -1043,11 +1105,11 @@ export class Store {
   }
   /** Pages whose title is this, ignoring case (titles needn't be unique). */
   findPagesByTitle(title: string): Page[] {
-    return this.all('SELECT * FROM pages WHERE lower(title) = lower(:title) ORDER BY updated_at DESC', { title }).map(toPage);
+    return this.all(`SELECT *, ${PAGE_SUMMARY_COLUMNS} FROM pages WHERE lower(title) = lower(:title) ORDER BY updated_at DESC`, { title }).map(toPage);
   }
   /** The page an approved draft (a tool call) was already saved as. */
   pageFromSource(runId: string, callId: string): Page | undefined {
-    const r = this.get('SELECT * FROM pages WHERE source_run_id = :runId AND source_call_id = :callId', { runId, callId });
+    const r = this.get(`SELECT *, ${PAGE_SUMMARY_COLUMNS} FROM pages WHERE source_run_id = :runId AND source_call_id = :callId`, { runId, callId });
     return r && toPage(r);
   }
   insertPage(input: { title: string; content: string; by: string; source?: { runId: string; callId: string } }): Page {
@@ -1073,7 +1135,51 @@ export class Store {
     return Number(res.changes) ? this.getPage(id)! : null;
   }
   deletePage(id: string): boolean {
+    // Its comments go with it (ON DELETE CASCADE).
     return Number(this.run('DELETE FROM pages WHERE id = :id', { id }).changes) > 0;
+  }
+
+  // ── page comments ─────────────────────────────────────────────────────
+  insertComment(input: Omit<PageComment, 'id' | 'resolved' | 'resolvedBy' | 'resolvedAt' | 'createdAt'>): PageComment {
+    const id = newId('cmt');
+    this.run(
+      `INSERT INTO page_comments (id, page_id, thread_id, author_id, body, mentions, anchor_quote, anchor_offset, anchor_revision, run_id, depth, created_at)
+       VALUES (:id, :pageId, :threadId, :authorId, :body, :mentions, :quote, :offset, :revision, :runId, :depth, :createdAt)`,
+      { ...input, id, quote: input.anchor?.quote, offset: input.anchor?.offset, revision: input.anchor?.revision, createdAt: now() },
+    );
+    return this.getComment(id)!;
+  }
+  getComment(id: string): PageComment | undefined {
+    const r = this.get('SELECT * FROM page_comments WHERE id = :id', { id });
+    return r && toComment(r);
+  }
+  /** A page's comments, roots and replies, oldest first. */
+  listComments(pageId: string): PageComment[] {
+    return this.all('SELECT * FROM page_comments WHERE page_id = :pageId ORDER BY created_at, rowid', { pageId }).map(toComment);
+  }
+  /** Replies in a thread, oldest first. */
+  listCommentReplies(threadId: string): PageComment[] {
+    return this.all('SELECT * FROM page_comments WHERE thread_id = :threadId ORDER BY created_at, rowid', { threadId }).map(toComment);
+  }
+  /** Comments one run wrote, oldest first. */
+  listCommentsByRun(runId: string): PageComment[] {
+    return this.all('SELECT * FROM page_comments WHERE run_id = :runId ORDER BY created_at, rowid', { runId }).map(toComment);
+  }
+  setCommentResolved(id: string, resolved: boolean, by: string) {
+    this.run('UPDATE page_comments SET resolved = :resolved, resolved_by = :by, resolved_at = :at WHERE id = :id', {
+      id,
+      resolved,
+      by: resolved ? by : null,
+      at: resolved ? now() : null,
+    });
+  }
+  /** Delete a comment; a thread's root takes its replies with it (ON DELETE CASCADE). */
+  deleteComment(id: string): boolean {
+    return Number(this.run('DELETE FROM page_comments WHERE id = :id', { id }).changes) > 0;
+  }
+  /** Unresolved threads on a page. */
+  openCommentCount(pageId: string): number {
+    return Number(this.get('SELECT COUNT(*) AS n FROM page_comments WHERE page_id = :pageId AND thread_id IS NULL AND resolved = 0', { pageId })?.n ?? 0);
   }
 
   // ── components (generative UI) ────────────────────────────────────────

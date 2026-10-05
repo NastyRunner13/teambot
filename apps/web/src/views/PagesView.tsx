@@ -1,16 +1,18 @@
 // Pages (after OpenDots' Spaces): Markdown documents you and your agents write and edit together. The library lists
 // them, newest change first; a page opens in an editor that saves as you type, over the revision you started from, and
-// shows other people's and agents' saves as they happen. "Ask an agent" opens your chat with an agent beside the page,
-// and what you send there carries a link to it.
-import { ArrowLeft, Check, CircleAlert, FileText, LoaderCircle, MessageSquare, Plus, Search, X } from 'lucide-react';
+// shows other people's and agents' saves as they happen. Select a passage to comment on it: comments sit in a rail
+// beside the page, and @mentioning an agent there has it answer in the thread. "Ask an agent" opens your chat with an
+// agent beside the page instead, and what you send there carries a link to it.
+import { ArrowLeft, Check, CircleAlert, FileText, LoaderCircle, MessageSquare, MessageSquarePlus, MessagesSquare, Plus, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useLocation, useSearch } from 'wouter';
-import type { Channel, Page } from '@teambot/shared';
+import { locateAnchor, type Channel, type CommentThread, type Page } from '@teambot/shared';
 import { api } from '../api';
 import { Avatar } from '../components/Avatar';
 import { Conversation } from '../components/Conversation';
 import { Markdown } from '../components/Markdown';
 import { MenuButton, MenuItem, MenuSeparator } from '../components/Menu';
+import { PageComments, selectionProblem, type CommentDraft } from '../components/PageComments';
 import { PageAutosave, type AutosaveState } from '../lib/autosave';
 import { ago } from '../lib/format';
 import { dmWith, memberName, useMember, useStore } from '../store';
@@ -81,6 +83,11 @@ export function PagesView() {
                   Edited by {memberName(p.updatedBy)} · {ago(p.updatedAt)}
                 </span>
               </span>
+              {p.openComments > 0 && (
+                <span className="page-row-comments small" title={`${p.openComments} open comment thread${p.openComments === 1 ? '' : 's'}`}>
+                  <MessagesSquare size={14} /> {p.openComments}
+                </span>
+              )}
               <span className="faint small">{chars(p.size)}</span>
             </Link>
           ))
@@ -120,6 +127,31 @@ const STATUS: Record<AutosaveState['status'], string> = {
   error: 'Couldn’t save',
 };
 
+/** How far down a textarea (from its top edge, in pixels) the line holding `offset` starts. */
+function caretTop(el: HTMLTextAreaElement, offset: number): number {
+  const mirror = document.createElement('div');
+  const style = getComputedStyle(el);
+  for (const p of ['box-sizing', 'width', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width', 'font-family', 'font-size', 'font-weight', 'font-style', 'letter-spacing', 'line-height', 'text-transform', 'word-spacing', 'tab-size']) {
+    mirror.style.setProperty(p, style.getPropertyValue(p));
+  }
+  Object.assign(mirror.style, { position: 'absolute', visibility: 'hidden', top: '0', left: '-9999px', whiteSpace: 'pre-wrap', overflowWrap: 'break-word', borderStyle: 'solid' });
+  mirror.textContent = el.value.slice(0, offset);
+  const mark = mirror.appendChild(document.createElement('span'));
+  mark.textContent = '\u200b';
+  document.body.appendChild(mirror);
+  const top = mark.offsetTop;
+  mirror.remove();
+  return top;
+}
+
+/** A selection in the page you can comment on: the passage (null when the preview's text isn't in the Markdown) and where to offer Comment. */
+interface Selection {
+  draft: CommentDraft | null;
+  quote: string;
+  /** Pixels from the top of the document column. */
+  top: number;
+}
+
 function download(title: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
   const link = document.createElement('a');
@@ -140,14 +172,77 @@ function PageEditor({ page }: { page: Page }) {
   const [controller] = useState(() => new PageAutosave(page, (id, patch) => api.patch<Page>(`/pages/${id}`, patch)));
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [mode, setMode] = useState<'write' | 'read'>(fresh || !page.content.trim() ? 'write' : 'read');
-  const [asking, setAsking] = useState(false);
+  const [side, setSide] = useState<'ask' | 'comments' | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
+  const [activeThread, setActiveThread] = useState<string | null>(null);
   const title = useRef<HTMLInputElement>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const column = useRef<HTMLElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   const editedBy = useMember(state.base.updatedBy);
+  const loadComments = useStore((s) => s.loadComments);
+  const threads = useStore((s) => s.comments[page.id]);
+  const openComments = threads ? threads.filter((t) => !t.resolved).length : (announced?.openComments ?? page.openComments);
 
   useEffect(() => {
     if (!pagesLoaded) loadPages().catch(() => undefined);
   }, [pagesLoaded, loadPages]);
+
+  useEffect(() => {
+    loadComments(page.id).catch(() => undefined);
+  }, [page.id, loadComments]);
+
+  /** Where a selection in the editor is, to offer Comment beside it. */
+  function selectInEditor() {
+    const el = editor.current;
+    if (!el || el.selectionStart === el.selectionEnd) return setSelection(null);
+    const quote = el.value.slice(el.selectionStart, el.selectionEnd);
+    setSelection({ draft: { quote, offset: el.selectionStart }, quote, top: el.offsetTop + caretTop(el, el.selectionStart) });
+  }
+
+  /** A selection in the preview: its text is found in the Markdown when it reads the same (no formatting in between). */
+  function selectInPreview() {
+    const sel = window.getSelection();
+    const col = column.current;
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !col) return setSelection(null);
+    const quote = sel.toString();
+    const at = locateAnchor(state.draft.content, { quote, offset: 0 });
+    const top = sel.getRangeAt(0).getBoundingClientRect().top - col.getBoundingClientRect().top;
+    setSelection({ draft: at === null ? null : { quote, offset: at }, quote, top });
+  }
+
+  function startComment() {
+    if (!selection) return notify('Select some text in the page to comment on it.', 'error');
+    const problem = selectionProblem(selection.quote);
+    if (problem) return notify(problem, 'error');
+    if (!selection.draft) return notify('That selection reads differently in the Markdown (formatting is in between). Select it in Write mode to comment on it.', 'error');
+    setCommentDraft(selection.draft);
+    setActiveThread(null);
+    setSide('comments');
+    setSelection(null);
+  }
+
+  /** Show a thread's passage: selected in the editor and scrolled into view. */
+  function showPassage(thread: CommentThread, at: number | null) {
+    setActiveThread(thread.id);
+    if (at === null || !thread.anchor) return;
+    const length = thread.anchor.quote.length;
+    const select = () => {
+      const el = editor.current;
+      const box = scroller.current;
+      if (!el || !box) return;
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(at, at + length);
+      const y = el.getBoundingClientRect().top + caretTop(el, at) - box.getBoundingClientRect().top;
+      box.scrollBy({ top: y - box.clientHeight / 3, behavior: 'smooth' });
+    };
+    if (mode === 'write') select();
+    else {
+      setMode('write');
+      requestAnimationFrame(() => requestAnimationFrame(select));
+    }
+  }
 
   // Someone else saved a newer revision: fetch it. With nothing unsaved here it simply appears; otherwise you choose.
   // While a save of ours is under way, its own announcement is no news: once it lands, anything newer still is.
@@ -176,6 +271,11 @@ function PageEditor({ page }: { page: Page }) {
         e.preventDefault();
         void controller.flush();
       }
+      // Ctrl+Alt+M comments on the selection, as in other editors.
+      if ((e.metaKey || e.ctrlKey) && e.altKey && e.code === 'KeyM' && !e.isComposing) {
+        e.preventDefault();
+        startCommentRef.current();
+      }
     };
     window.addEventListener('beforeunload', leave);
     window.addEventListener('keydown', save);
@@ -187,6 +287,20 @@ function PageEditor({ page }: { page: Page }) {
       controller.stop();
     };
   }, [controller]);
+
+  // A selection made in the Preview ends when it collapses anywhere (a click elsewhere), and none carries across modes.
+  useEffect(() => {
+    setSelection(null);
+    if (mode !== 'read') return;
+    const collapsed = () => {
+      if (window.getSelection()?.isCollapsed) setSelection(null);
+    };
+    document.addEventListener('selectionchange', collapsed);
+    return () => document.removeEventListener('selectionchange', collapsed);
+  }, [mode]);
+
+  const startCommentRef = useRef(startComment);
+  startCommentRef.current = startComment;
 
   // The editor grows with its text, so the page scrolls as one document.
   useEffect(() => {
@@ -229,7 +343,10 @@ function PageEditor({ page }: { page: Page }) {
               Preview
             </button>
           </div>
-          <button className={`btn sm pill ${asking ? 'active' : ''}`} aria-pressed={asking} onClick={() => setAsking(!asking)}>
+          <button className={`btn sm pill ${side === 'comments' ? 'active' : ''}`} aria-pressed={side === 'comments'} onClick={() => setSide(side === 'comments' ? null : 'comments')}>
+            <MessagesSquare size={14} /> Comments{openComments ? ` · ${openComments}` : ''}
+          </button>
+          <button className={`btn sm pill ${side === 'ask' ? 'active' : ''}`} aria-pressed={side === 'ask'} onClick={() => setSide(side === 'ask' ? null : 'ask')}>
             <MessageSquare size={14} /> Ask an agent
           </button>
           <MenuButton label="More for this page">
@@ -251,8 +368,21 @@ function PageEditor({ page }: { page: Page }) {
             </MenuItem>
           </MenuButton>
         </div>
-        <div className="doc-scroll">
-          <article className="doc-column">
+        <div className="doc-scroll" ref={scroller}>
+          <article className="doc-column" ref={column}>
+            {selection && (
+              <button
+                className="doc-comment-button"
+                style={{ top: Math.max(0, selection.top) }}
+                // Keep the selection: a click here must not take focus from the editor first.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={startComment}
+                title="Comment on the selection (Ctrl+Alt+M)"
+                aria-label="Comment on the selection"
+              >
+                <MessageSquarePlus size={16} /> <span>Comment</span>
+              </button>
+            )}
             {state.status === 'conflict' && (
               <div className="doc-notice conflict" role="alert">
                 <p>
@@ -318,16 +448,30 @@ function PageEditor({ page }: { page: Page }) {
                 value={state.draft.content}
                 autoFocus={!fresh}
                 onChange={(e) => controller.edit({ content: e.target.value })}
+                onSelect={selectInEditor}
+                onBlur={() => setSelection(null)}
               />
             ) : (
-              <div className="doc-preview" onDoubleClick={() => setMode('write')} title="Double-click to edit">
+              <div className="doc-preview" onDoubleClick={() => setMode('write')} onMouseUp={selectInPreview} onKeyUp={selectInPreview} title="Double-click to edit">
                 {state.draft.content.trim() ? <Markdown text={state.draft.content} /> : <p className="muted">This page is empty. Switch to Write to add to it.</p>}
               </div>
             )}
           </article>
         </div>
       </section>
-      {asking && <PageAssistant page={{ id: page.id, title: state.draft.title }} beforeSend={() => controller.flush()} onClose={() => setAsking(false)} />}
+      {side === 'comments' && (
+        <PageComments
+          pageId={page.id}
+          content={state.draft.content}
+          draft={commentDraft}
+          activeId={activeThread}
+          beforeComment={() => controller.flush()}
+          onClearDraft={() => setCommentDraft(null)}
+          onShow={showPassage}
+          onClose={() => setSide(null)}
+        />
+      )}
+      {side === 'ask' && <PageAssistant page={{ id: page.id, title: state.draft.title }} beforeSend={() => controller.flush()} onClose={() => setSide(null)} />}
     </div>
   );
 }
