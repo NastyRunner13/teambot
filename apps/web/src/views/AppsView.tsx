@@ -648,7 +648,7 @@ export type AppsPage =
   | { kind: 'custom' }
   | { kind: 'app'; id: string }
   | { kind: 'server'; name: string }
-  | { kind: 'skills'; skill?: string }
+  | { kind: 'skills'; skill?: string; draft?: string }
   | { kind: 'components'; name?: string }
   | { kind: 'files' };
 
@@ -685,7 +685,7 @@ export function AppsView({ page }: { page: AppsPage }) {
     case 'skills':
       return (
         <SettingsShell active="skills" fill>
-          <SkillsView name={page.skill} />
+          <SkillsView name={page.skill} draft={page.draft} />
         </SettingsShell>
       );
     case 'components':

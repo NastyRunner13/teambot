@@ -752,6 +752,32 @@ button.sent-note:hover { background: var(--panel-2); }
 .file-preview pre { margin: 0; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
 .file-preview img { max-width: 100%; }
 
+/* ── learning by demonstration: Record in the screen bar, drafts under Skills (RecordControl, RecordingReview) ── */
+.warn-text { color: var(--warn); }
+.rec-icon { color: var(--danger); fill: var(--danger); }
+.rec-dot { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: rec-pulse 1.4s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { opacity: 0.35; } }
+.rec-live { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border-radius: 999px; background: var(--danger-weak); color: var(--danger); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.split-list-label { padding: 14px 14px 6px; color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+/* Side by side when the pane has room for both, one above the other when it hasn't. */
+.draft-review { container-type: inline-size; }
+.draft-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+@container (min-width: 760px) { .draft-cols { grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); gap: 24px; } }
+.draft-main { min-width: 0; }
+.draft-note { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 14px; border-radius: 14px; background: var(--panel-2); font-size: 13px; }
+.draft-note.danger { background: var(--danger-weak); color: var(--text); }
+.draft-recording { min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.draft-recording h3 { margin: 0 0 8px; }
+.draft-recording h3:not(:first-child) { margin-top: 16px; }
+.rec-log { display: flex; flex-direction: column; gap: 6px; max-height: 420px; margin: 0; padding: 0; overflow-y: auto; list-style: none; font-size: 12.5px; }
+.rec-log li { display: flex; align-items: baseline; gap: 8px; }
+.rec-time { flex: none; width: 34px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.rec-what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rec-stills { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.rec-still { padding: 0; overflow: hidden; aspect-ratio: 16 / 10; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--panel-2); cursor: zoom-in; }
+.rec-still img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.rec-still-large { display: block; width: 100%; border: 1px solid var(--border); border-radius: 10px; }
+
 /* ── file previews (FileView.tsx): beside a chat, in the Files page and in the dialog ── */
 .panel.wide { width: var(--file-panel-w, 46vw); }
 .panel-resize { position: absolute; top: 0; bottom: 0; left: -4px; z-index: 2; width: 8px; cursor: col-resize; touch-action: none; }

@@ -105,6 +105,7 @@ export function App() {
           <Route path="/apps/mcp/:name">{(p) => <AppsView page={{ kind: 'server', name: decodeURIComponent(p.name) }} />}</Route>
           <Route path="/apps/:id">{(p) => <AppsView page={{ kind: 'app', id: p.id }} />}</Route>
           <Route path="/skills">{() => <AppsView page={{ kind: 'skills' }} />}</Route>
+          <Route path="/skills/drafts/:id">{(p) => <AppsView page={{ kind: 'skills', draft: p.id }} />}</Route>
           <Route path="/skills/:name">{(p) => <AppsView page={{ kind: 'skills', skill: p.name }} />}</Route>
           <Route path="/components">{() => <AppsView page={{ kind: 'components' }} />}</Route>
           <Route path="/components/:name">{(p) => <AppsView page={{ kind: 'components', name: p.name }} />}</Route>

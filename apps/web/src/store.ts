@@ -15,6 +15,7 @@ import {
   type Message,
   type PageComment,
   type PageSummary,
+  type RecordingSummary,
   type Run,
   type RunSummary,
   type Schedule,
@@ -68,6 +69,8 @@ interface State {
   runSummaries: Record<string, RunSummary>;
   schedules: Schedule[];
   skills: SkillSummary[];
+  /** Skill drafts from recordings (and recordings in progress) this person may see, newest first. */
+  recordings: RecordingSummary[];
   secrets: string[];
   pausedAll: boolean;
   health: Health | null;
@@ -173,6 +176,7 @@ export const useStore = create<State>((set, get) => ({
   runSummaries: {},
   schedules: [],
   skills: [],
+  recordings: [],
   secrets: [],
   pausedAll: false,
   health: null,
@@ -213,6 +217,7 @@ export const useStore = create<State>((set, get) => ({
         runs: Object.fromEntries(b.activeRuns.map((r) => [r.id, r])),
         schedules: b.schedules,
         skills: b.skills,
+        recordings: b.recordings,
         secrets: b.secrets,
         pausedAll: b.pausedAll,
         health: b.health,
@@ -451,6 +456,11 @@ function apply(e: EventRecord) {
       next.skills = [...s.skills.filter((x) => x.name !== d.skill.name), d.skill as SkillSummary].sort((a, b) => a.name.localeCompare(b.name));
     }
     if (e.type === 'skill.deleted') next.skills = s.skills.filter((x) => x.name !== d.name);
+    if (e.type.startsWith('recording.') && d.recording) {
+      const r = d.recording as RecordingSummary;
+      next.recordings = [r, ...s.recordings.filter((x) => x.id !== r.id)].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    }
+    if (e.type === 'recording.deleted') next.recordings = s.recordings.filter((x) => x.id !== d.id);
     if (e.type === 'secret.saved' && !s.secrets.includes(d.name)) next.secrets = [...s.secrets, d.name].sort();
     if (e.type === 'secret.deleted') next.secrets = s.secrets.filter((n) => n !== d.name);
     if (e.type.startsWith('connector.') && d.servers && s.health) next.health = { ...s.health, mcpServers: d.servers as McpServerStatus[] };

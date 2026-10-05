@@ -1,11 +1,12 @@
 // Skills: written procedures (SKILL.md) the team's agents load and follow.
-import { BookOpen, Plus, Trash2 } from 'lucide-react';
+import { BookOpen, Circle, FileClock, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import type { Skill } from '@teambot/shared';
 import { api } from '../api';
 import { Markdown } from '../components/Markdown';
 import { Modal } from '../components/Modal';
+import { RecordingReview } from '../components/RecordingReview';
 import { ago } from '../lib/format';
 import { useStore } from '../store';
 
@@ -187,8 +188,13 @@ function Editor({ name }: { name: string }) {
   );
 }
 
-export function SkillsView({ name }: { name?: string }) {
+const DRAFT_STATUS = { recording: 'Recording…', drafting: 'Writing the draft…', ready: 'Ready to review', failed: 'Couldn’t draft' } as const;
+
+/** `name` opens a skill, `draft` a skill drafted from a recording. */
+export function SkillsView({ name, draft }: { name?: string; draft?: string }) {
   const skills = useStore((s) => s.skills);
+  const drafts = useStore((s) => s.recordings);
+  const agents = useStore((s) => s.agents);
   const [, navigate] = useLocation();
   const [creating, setCreating] = useState(false);
 
@@ -197,7 +203,7 @@ export function SkillsView({ name }: { name?: string }) {
       <header className="fill-head">
         <div className="grow">
           <h1>Skills</h1>
-          <p>Written procedures your agents load and follow, in the open SKILL.md format.</p>
+          <p>Written procedures your agents load and follow, in the open SKILL.md format. Write one, or show one: take control of an agent’s computer and press Record.</p>
         </div>
         <button className="btn" onClick={() => setCreating(true)}>
           <Plus size={15} /> New skill
@@ -205,6 +211,25 @@ export function SkillsView({ name }: { name?: string }) {
       </header>
       <div className="split-view">
         <div className="split-list">
+          {drafts.length > 0 && (
+            <>
+              <div className="split-list-label">Drafts from recordings</div>
+              {drafts.map((r) => (
+                <div key={r.id} className={`list-row clickable ${r.id === draft ? 'selected' : ''}`} onClick={() => navigate(`/skills/drafts/${r.id}`)}>
+                  {r.status === 'recording' ? <Circle size={13} className="rec-icon" /> : <FileClock size={15} className="faint" />}
+                  <div className="grow" style={{ minWidth: 0 }}>
+                    <div className="ellipsis mono small" style={{ fontWeight: 600 }}>
+                      {r.name || 'Untitled recording'}
+                    </div>
+                    <div className={`small ${r.status === 'failed' ? 'error-text' : r.status === 'ready' ? 'warn-text' : 'muted'} skill-desc`}>
+                      {DRAFT_STATUS[r.status]} · {agents.find((a) => a.id === r.agentId)?.name ?? 'removed agent'} · {r.actions} {r.actions === 1 ? 'action' : 'actions'}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div className="split-list-label">Skills</div>
+            </>
+          )}
           {skills.length === 0 && (
             <div className="empty" style={{ margin: 16 }}>
               No skills yet. Write down how your team does a recurring job once, and every agent can follow it.
@@ -223,7 +248,13 @@ export function SkillsView({ name }: { name?: string }) {
           ))}
         </div>
         <div className="split-detail">
-          {name ? <Editor key={name} name={name} /> : <div className="muted">{skills.length ? 'Pick a skill to read or edit it.' : 'Create your first skill to get started.'}</div>}
+          {draft ? (
+            <RecordingReview key={draft} id={draft} />
+          ) : name ? (
+            <Editor key={name} name={name} />
+          ) : (
+            <div className="muted">{skills.length || drafts.length ? 'Pick a skill to read or edit it.' : 'Create your first skill to get started.'}</div>
+          )}
         </div>
       </div>
       {creating && <NewSkillDialog onClose={() => setCreating(false)} />}
