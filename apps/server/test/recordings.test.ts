@@ -462,7 +462,9 @@ describe('recordings over the API', () => {
 
     computers.recorder[ops.id].events.push(...expenseReport('x').slice(0, 2));
     await app.recordings.collect(id);
-    expect((await srv.inject({ method: 'GET', url: `/api/recordings/${id}/frames/1.jpg` })).body).toBe(`still of ${PAGE}`);
+    const frame = await srv.inject({ method: 'GET', url: `/api/recordings/${id}/frames/1.jpg` });
+    expect(frame.body).toBe(`still of ${PAGE}`);
+    expect(frame.headers).toMatchObject({ 'content-type': 'image/jpeg', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" });
     expect((await srv.inject({ method: 'GET', url: `/api/recordings/${id}/frames/2.jpg` })).statusCode).toBe(404);
     expect((await srv.inject({ method: 'GET', url: `/api/recordings/${id}/frames/..%2F..%2Fmaster.key` })).statusCode).toBe(400);
 

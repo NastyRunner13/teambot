@@ -134,6 +134,13 @@ function describeElement(at: number | null | { x: number; y: number }) {
   };
 }
 
+/** The promise's value, or `fallback` if it takes longer than `ms` (a page stuck on a dialog never answers). */
+function within<T>(ms: number, p: Promise<T>, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<T>((resolve) => (timer = setTimeout(() => resolve(fallback), ms)));
+  return Promise.race([p.catch(() => fallback), late]).finally(() => clearTimeout(timer));
+}
+
 interface Recording {
   id: string;
   startedAt: number;
@@ -179,6 +186,7 @@ export class BrowserController {
         ctx.on('page', (p) => {
           this.active = p;
         });
+        await this.exposeRecorder(ctx);
         return ctx;
       } catch (err) {
         lastErr = err;
@@ -251,7 +259,7 @@ export class BrowserController {
   /** The tab a person at the screen is looking at: the one whose document is visible. */
   private async visiblePage(): Promise<Page | null> {
     for (const p of (await this.context()).pages().filter((x) => !x.isClosed())) {
-      if (await p.evaluate(() => document.visibilityState === 'visible').catch(() => false)) return p;
+      if (await within(2000, p.evaluate(() => document.visibilityState === 'visible'), false)) return p;
     }
     return null;
   }
@@ -284,7 +292,7 @@ export class BrowserController {
   private async instrument(frame: Frame) {
     await frame.waitForLoadState('domcontentloaded', { timeout: 15_000 }).catch(() => undefined);
     if (!this.recording || frame.isDetached()) return;
-    await frame.evaluate(recordInPage, RECORD_BINDING).catch(() => undefined);
+    await within(5000, frame.evaluate(recordInPage, RECORD_BINDING), undefined);
     if (frame === frame.page().mainFrame()) await this.announce(frame.page());
   }
 
@@ -295,21 +303,29 @@ export class BrowserController {
     for (const frame of page.frames()) void this.instrument(frame);
   }
 
+  /**
+   * The recording binding, exposed once per connection, as soon as computerd connects: Playwright only takes calls
+   * once it has been installed in every open tab, which a tab that stopped answering would hold up for good. It does
+   * nothing until a recording starts (calls are dropped), and the recorder itself is only put in pages while recording.
+   */
+  private async exposeRecorder(ctx: BrowserContext) {
+    if (this.bindingReady) return;
+    this.bindingReady = true;
+    const exposed = ctx
+      .exposeBinding(RECORD_BINDING, (source, payload: unknown) => {
+        const event = this.recording && source.page ? eventFromPage(payload, source.page.url()) : null;
+        if (event) this.push(event);
+      })
+      .catch((err: Error) => {
+        // Still registered from before (same connection): it is there, which is all that matters.
+        if (!/already registered/i.test(err.message)) console.error(`recording binding: ${err.message}`);
+      });
+    await Promise.race([exposed, new Promise((resolve) => setTimeout(resolve, 5000))]);
+  }
+
   async startRecording(id: string) {
     if (!id) throw new Error('id is required');
     const ctx = await this.context();
-    if (!this.bindingReady) {
-      await ctx
-        .exposeBinding(RECORD_BINDING, (source, payload: unknown) => {
-          const event = this.recording && source.page ? eventFromPage(payload, source.page.url()) : null;
-          if (event) this.push(event);
-        })
-        .catch((err: Error) => {
-          // Still registered from before (same connection): it is there, which is all that matters.
-          if (!/already registered/i.test(err.message)) throw err;
-        });
-      this.bindingReady = true;
-    }
     if (this.recording) await this.stopRecording();
     const rec: Recording = { id, startedAt: Date.now(), seq: 0, events: [], dropped: 0, lastUrl: new WeakMap(), detach: [] };
     this.recording = rec;
@@ -345,7 +361,7 @@ export class BrowserController {
     for (const off of rec.detach.splice(0)) off();
     if (this.browser?.isConnected()) {
       for (const page of this.browser.contexts()[0]?.pages() ?? []) {
-        for (const frame of page.frames()) await frame.evaluate(muteInPage).catch(() => undefined);
+        for (const frame of page.frames()) await within(2000, frame.evaluate(muteInPage), undefined);
       }
     }
     return { id: rec.id, events: out.events, dropped: out.dropped };

@@ -3,8 +3,14 @@
 // The value of a password field, or of any field that looks like it holds a secret, is never read: the event says
 // something was typed there, not what. Everything here comes from web pages, so the server treats it as untrusted.
 
-/** The function each recorded frame calls (exposed by Playwright, so it reaches computerd and not the page's server). */
-export const RECORD_BINDING = '__teambotRecord';
+import crypto from 'node:crypto';
+
+/**
+ * The function recorded frames call (exposed by Playwright, so it reaches computerd and not the page's server). Named
+ * at random per process, so a page can't simply call it by a known name; it could still find it, which is why
+ * everything it sends is checked.
+ */
+export const RECORD_BINDING = `__tb${crypto.randomBytes(6).toString('hex')}`;
 
 export type RecordedKind = 'navigate' | 'click' | 'type' | 'select' | 'check' | 'upload' | 'press';
 

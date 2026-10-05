@@ -1178,7 +1178,10 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     const rec = recordingFor(req, req.params.id);
     const file = app.recordings.frameFile(rec.id, req.params.file);
     if (!file) throw new HttpError(404, 'still not found');
+    // The bytes came from the agent's computer: never let a browser take them for anything but a picture.
     reply.header('content-type', 'image/jpeg');
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('content-security-policy', "default-src 'none'");
     reply.header('cache-control', 'private, max-age=86400');
     return reply.send(fs.createReadStream(file));
   });
