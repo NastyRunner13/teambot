@@ -4,6 +4,8 @@
 
 Reviewed on **2 October 2026**, on branch **`grok-ui`**, against base commit **`6f3440f` and the existing working-tree edits**. This describes the checked-out source, rather than a running production installation. Environment-specific credentials, active agents, saved policies, and actual service availability were not inspected. Defaults below are code defaults; saved workspace settings can change behavior.
 
+Sections have been updated as features landed, through **6 October 2026**: pages, comments and @mentions in pages, generative UI and tool cards, file previews, garbled-output handling and learning by demonstration. Task-oriented guides live in [docs/guides](guides/) (see the [documentation index](README.md)).
+
 ## Contents
 
 1. [The application in plain English](#1-the-application-in-plain-english)
@@ -317,6 +319,12 @@ The order inside `Runtime.loop()` determines both responsiveness and safety:
 7. Normalize tool-call IDs, append and persist the assistant message, update usage and step counters, and append `llm.response` to the audit log.
 8. If this assistant message has no tool calls, post its nonempty answer unless it is exactly `[silent]`. Go back to the top; new matching input can still arrive before the completion check.
 
+Three kinds of bad model output are handled before step 8 posts anything:
+
+- **Empty replies.** Some models end a turn with reasoning only. The run sends one `EMPTY_REPLY_NUDGE` asking for the reply. If the next turn is empty too, a note goes in the chat, so a run never finishes in silence.
+- **Garbled replies.** Text containing a null byte is never posted (SQLite keeps text only up to the first one). `GARBLED_REPLY_NUDGE` asks again; tool arguments containing one are refused before anything runs; two garbled turns in a row fail the run with an error that says to pick another model.
+- **Cut-off replies.** A reply that stopped at the output limit (`finishReason: 'length'`) is marked `cutOff` in the transcript (the mark is stripped on the way to the model), so a broken tool call in it is explained to the model as cut off rather than as invalid JSON.
+
 `pendingToolCalls()` scans backward to the latest assistant message. It compares that message's call IDs with subsequent `tool` messages' `tool_call_id` values. A call is pending when there is no corresponding tool result. A response containing three tool calls therefore creates three serial gateway executions, followed by another model call. Different agents may execute concurrently, but calls within this run do not execute as a parallel batch.
 
 Pending tool calls have priority over new inbox messages. A human correction that arrives during a batch is consumed after the batch completes; posting a correction alone does not cancel the current action. Pause or cancellation uses the abort path. This distinction matters when explaining how quickly a changed instruction affects an already proposed action.
@@ -366,6 +374,12 @@ A request that ends without an answer is said out loud, the same way: the asked 
 `ask_agent` refuses: asking yourself or a person; asking an agent that is waiting on your answer (say it in your reply instead); a paused or over-budget agent; a job already passed between agents `TEAMBOT_MAX_AGENT_DEPTH` times; and a run that has already handed work to `TEAMBOT_MAX_HANDOFFS_PER_RUN` teammates (default 4), counting agents it @mentioned in group chats. `post_message` applies the same limit to new agent mentions and refuses a DM with another agent.
 
 Example: Lead asks Researcher to check a source, with the question, relevant context, constraints and the expected output. Researcher checks it on its own computer and replies. Lead gets the answer in the person's chat, where it was asked, and replies there. Each step remains independently governed and logged.
+
+### Page comments and @mentions
+
+Comments on pages (`comments.ts`, migration 20) route work the same way chats do. Writing `@Agent` in a comment adds an inbox item that carries `commentThreadId` (the thread's root comment) instead of a channel, so the run it starts has `channelId: null`. The agent gets the page, the quoted passage and the thread so far (page text and earlier comments as untrusted content), its final reply and any runtime notice are posted in the thread by `say()`, and `ask_agent` answers return there (`originCommentThreadId`). A person replying in a thread an agent wrote in continues with that agent without a new mention. The loop guard, read-only flag and per-run handoff limit apply as in chats; an agent's @mentions in comments count toward `TEAMBOT_MAX_HANDOFFS_PER_RUN`.
+
+Each thread keeps an `anchor`: the quoted passage, its offset and the revision it was made on. `locateAnchor` (shared by server and web) finds the passage again in the current text, nearest the old offset; when it can't, the thread is shown as outdated and kept. A new anchor must be in the page as saved (409 otherwise), so the editor flushes before commenting. `page.comment.*` events carry `openComments` and no run or channel scope, so every open editor gets them. Anyone may resolve a thread; only the author or an owner may delete a comment (`CommentForbidden`, 403).
 
 ### Preventing endless conversations
 
@@ -677,6 +691,8 @@ This is the built-in tool inventory in the reviewed source. “Risk” selects a
 | `request_human_takeover` | Ask a human to perform a computer step | Internal; forced takeover flow |
 | `list_pages`, `read_page` | Find and read the team's pages (Markdown documents), with each page's revision | Read; `read_page` output is untrusted |
 | `create_page`, `edit_page` | Write a page; edits name the revision they started from and are refused if it moved on | Write |
+| `list_page_comments` | Read a page's comment threads | Read; output is untrusted |
+| `comment_on_page`, `resolve_comment` | Comment on a page or a passage (with @mentions that route work), and resolve threads | Internal; `comment_on_page` is read-only eligible |
 | `propose_page` | Show a person a draft page; saved only on **Approve & save** | Internal; forced approval flow |
 | `show_ui` | Draw an interface the agent writes (HTML, CSS, script) in a sandboxed frame in the chat | Internal; read-only eligible; off with `TEAMBOT_GENERATIVE_UI=0` |
 | `ui_<name>` | Draw a published component, with arguments checked against its JSON Schema | Internal; read-only eligible; one per published component |
@@ -690,6 +706,7 @@ This is the built-in tool inventory in the reviewed source. “Risk” selects a
 | `read_file`, `list_files` | Read text or list computer files | Read |
 | `write_file` | Create, overwrite, or append text | Write |
 | `browser_navigate`, `browser_snapshot` | Open a URL or inspect the current page | Read |
+| `browser_screenshot` | See the page as an image, for charts and tables drawn as pictures | Read; hidden from models OpenRouter lists as text-only |
 | `browser_click`, `browser_type`, `browser_press` | Act on page elements or focus | Write |
 | `browser_scroll`, `browser_back`, `browser_tabs` | Navigate/inspect browser state; list or switch tabs | Read |
 | `computer_screenshot`, `computer_scroll` | Observe or scroll the desktop | Read; desktop must be enabled |
@@ -1023,6 +1040,8 @@ Good memory: report-format preferences, verified project conventions, stable URL
 Every computer mounts the same `/shared`. In host mode it maps to `data/shared`; Compose uses a named shared volume. Uploads normally land under `/shared/uploads`. The upload size limit is 25 MiB.
 
 An attachment is a reference to a file that already exists in `/shared`, with path/name/size metadata. It does not snapshot immutable bytes into the message. If the file is later replaced or deleted, the old reference follows the path or becomes unavailable. Agents receive attached paths and use computer tools to inspect contents, including using shell utilities for binary formats.
+
+An agent's message also carries the existing `/shared` files its text names (`sharedFilesIn` in `shared-files.ts`), so a reply like "Saved /shared/report.md" arrives with the file attached even if the agent didn't attach it. In the web app a file card opens the file beside the chat (`FilePanel`), and a new agent message with files opens its first one when the panel isn't busy. Markdown, code, CSV and notebooks render in the app; images, audio and video use the browser; web pages, Word, Excel, PowerPoint, PDF and Mermaid render in the widget sandbox with pinned viewer libraries. `/api/shared/file` serves HTML and SVG as text with an etag, and previews reload only when the etag changes after a `tool.finished`.
 
 The Library view gathers files referenced by messages. It is different from browsing every file in `/shared`. Files left only in an agent's private workspace are not automatically available to other agents or the human web file browser.
 
@@ -1398,6 +1417,7 @@ Configuration finds the repo root using `pnpm-workspace.yaml`, then loads its `.
 | `TEAMBOT_MAX_STEPS_PER_RUN` | `40` |
 | `TEAMBOT_MAX_CONCURRENT_RUNS` | `4` |
 | `TEAMBOT_MAX_AGENT_DEPTH` | `6` |
+| `TEAMBOT_MAX_HANDOFFS_PER_RUN` | `4` teammates one run may hand work to (`ask_agent` and agent @mentions in group chats) |
 | `TEAMBOT_COMPACT_AT_TOKENS` | `60000` estimated tokens |
 | `TEAMBOT_MCP_CONFIG` | Repo `mcp.json` |
 | `TEAMBOT_MASTER_KEY` | Base64 32-byte key, else `data/master.key` |
@@ -1407,6 +1427,7 @@ Configuration finds the repo root using `pnpm-workspace.yaml`, then loads its `.
 | `TEAMBOT_EGRESS_PORTS` | `18800-18999` for agent proxies |
 | `TEAMBOT_EGRESS_BIND`, `TEAMBOT_EGRESS_HOST` | Host/Compose-sensitive proxy bind and reachability defaults |
 | `TEAMBOT_OFFLINE_MODELS` | `1` selects a canned echo provider |
+| `TEAMBOT_GENERATIVE_UI` | On; `0`, `false`, `off` or `no` removes `show_ui` (published components still work) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional observability destination |
 | `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` | Export credentials/options; default service name `teambot` |
 

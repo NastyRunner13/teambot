@@ -1,10 +1,13 @@
 # TeamBot
 
+[![CI](https://github.com/NastyRunner13/teambot/actions/workflows/ci.yml/badge.svg)](https://github.com/NastyRunner13/teambot/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **An open-source office for AI agents.** Every agent gets its own computer and its own model. Agents work with you and with each other in chats and channels, and they can't act without passing your rules.
 
 TeamBot is a self-hosted take on products like xAI Grok Bot, OpenAI Dots and Manus Cue. Unlike them, each agent has a separate, isolated computer, you choose any model per agent through [OpenRouter](https://openrouter.ai), and everything runs on your machine. The research behind it is in [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md).
 
-For a detailed, code-based explanation of the architecture, agent communication, tools, computers, skills, memory, governance, and operations, read the [complete project guide](docs/PROJECT_OVERVIEW.md).
+New here? Follow [Getting started](docs/guides/getting-started.md). Every guide is listed in the [documentation index](docs/README.md), and the [project guide](docs/PROJECT_OVERVIEW.md) explains the architecture and internals from the code up.
 
 > Status: **P0 and P1 complete**, self-hosted, for one person or a small team. Read [Security model](#security-model) before you point agents at real accounts.
 
@@ -21,18 +24,18 @@ For a detailed, code-based explanation of the architecture, agent communication,
 - **Progress you can follow.** For any job with several steps, an agent writes its plan as a checklist and ticks it off as it works; the chat shows the step it is on, and the finished reply keeps the whole list. Each action shows as a card in the chat (the command and its output, the site it opened, the file or page it wrote), and the latest one stays in view while it works. There is no task board: agents hand each other work by message, and you see "Messaged Job Scout" in your chat when they do.
 - **Pages you write together.** Pages are Markdown documents you and your agents edit side by side: the editor saves as you type, an agent's edit appears while you look, and every save names the revision it started from, so nobody overwrites a change they never saw (you choose to load theirs or keep yours). Ask an agent for a document and it can show you the draft in the chat first, saving it only when you press **Approve & save**. Select a passage to comment on it, or @mention an agent in a comment: it answers in the thread, and can edit the page from there. A comment whose passage was edited away is marked outdated, not lost.
 - **Answers you can see.** Agents can draw an interface in the chat instead of only describing it: a chart, a comparison, a small form whose buttons fill in your reply. Reusable ones are **components** you write and preview in a playground (or an agent drafts), and agents can use only the ones you publish. Every one runs in a sandboxed frame with no access to TeamBot and no network.
-- **Governance.** Every tool call passes a policy check: **allow / review / ask / deny / hand off**. By default, agents ask before clicking Send, Pay, Delete and similar buttons, hand password and card fields to you, and send risky shell commands to an independent **reviewer model** that approves, escalates to you, or blocks them. Rules can add [CEL](https://cel.dev) conditions (`when: "spend_today > 5.0"`, out-of-hours rules and so on). Approvals show up in the chat where the agent asked (marked in the conversation list) and on your phone.
+- **Governance.** Every tool call passes a policy check: **allow / review / ask / deny / hand off**. By default, agents ask before clicking Send, Pay, Delete and similar buttons, hand password and card fields to you, and send risky shell commands to an independent **reviewer model** that approves, escalates to you, or blocks them. Rules can add [CEL](https://cel.dev) conditions (`when: "spend_today > 5.0"`, out-of-hours rules and so on). Approvals show up in the chat where the agent asked (marked in the conversation list) and on your phone. See the [action policy guide](docs/guides/action-policy.md) for recipes.
 - **Budgets.** Daily and monthly dollar caps and daily token caps per agent, plus a workspace-wide daily cap. Work over budget waits in the queue instead of running.
 - **Prompt-injection defence.** Web pages, files, command output, MCP results and webhook bodies reach the model inside `<untrusted_content>` tags it is told never to take orders from.
 - **Secrets kept out of prompts.** Secrets are encrypted at rest. Agents write `{{secret:NAME}}` in a tool argument, the server fills in the value at execution time, and it is scrubbed from text output; a screenshot taken by an action that used a secret is withheld. This keeps values out of transcripts and model calls by default, but it is not a sandbox: an agent allowed to use a secret in a shell command can deliberately transform and reveal it (`echo … | base64`), or show it on screen later. Give agents only the secrets they need, and use the policy (for example `ask` on `shell` with `args: { command: "secret:" }`) where that matters.
-- **Skills.** Written procedures in the open `SKILL.md` format that agents load when a task calls for them, with any scripts or templates copied to their computer. Write one, or **show one**: take control of an agent's computer, press **Record**, do the task in its browser, and a model drafts the skill from what you did. Passwords and stored secrets never reach the recording or the draft, and no agent sees a draft until you save it.
+- **Skills.** Written procedures in the open `SKILL.md` format that agents load when a task calls for them, with any scripts or templates copied to their computer. Write one, or **show one**: take control of an agent's computer, press **Record**, do the task in its browser, and a model drafts the skill from what you did. Passwords and stored secrets never reach the recording or the draft, and no agent sees a draft until you save it. See [Skills and memory](docs/guides/skills-and-memory.md).
 - **Memory you can read.** Each agent keeps lasting notes, plus a team memory every agent shares, as plain Markdown files you can edit in the app or on disk. **Search** finds anything said or done before, for you and for agents.
 - **Durable runs.** Each step is saved, so runs survive restarts, pauses and long waits for approval. A tool that was interrupted mid-flight is reported as "interrupted", never silently re-run.
 - **Audit log.** Every message, model call (tokens and cost), tool call, policy decision, review and approval is recorded. Each reply carries a short note of what the agent did, with the full step-by-step log one click away; the whole log is available from `/api/events`.
-- **Routines.** Hand an agent a prompt on a cron schedule, or when something happens: a **webhook** call, a new **email** (any IMAP mailbox, including Gmail with an app password), a message in a **Slack channel**, or an upcoming **calendar event** (any iCal feed). Routines can follow a skill, and **read-only** routines can only look and report (for monitoring).
-- **Connectors.** **Connect apps** is a marketplace of vendors' own MCP servers (Notion, GitHub, Linear, Atlassian, Zapier, Stripe, Supabase and about 30 more), plus any remote MCP server by its address. You sign in once in your browser (OAuth), or paste a token for servers like GitHub's; credentials are stored encrypted and refreshed automatically, and you switch on which agents get each app's tools on its page. Local MCP servers go in `mcp.json` (same format as Claude's `.mcp.json`).
+- **Routines.** Hand an agent a prompt on a cron schedule, or when something happens: a **webhook** call, a new **email** (any IMAP mailbox, including Gmail with an app password), a message in a **Slack channel**, or an upcoming **calendar event** (any iCal feed). Routines can follow a skill, and **read-only** routines can only look and report (for monitoring). See [Routines and triggers](docs/guides/routines-and-triggers.md).
+- **Connectors.** **Connect apps** is a marketplace of vendors' own MCP servers (Notion, GitHub, Linear, Atlassian, Zapier, Stripe, Supabase and about 30 more), plus any remote MCP server by its address. You sign in once in your browser (OAuth), or paste a token for servers like GitHub's; credentials are stored encrypted and refreshed automatically, and you switch on which agents get each app's tools on its page. Local MCP servers go in `mcp.json` (same format as Claude's `.mcp.json`). See [Connectors](docs/guides/connectors.md).
 - **Telegram and Slack.** Talk to your agents where you already are, get their messages to you, and approve or deny with a button.
-- **Teams.** Use it alone, or turn on sign-in in **Settings → Team** and invite teammates with one-time links. Everyone shares the agents and group chats, direct messages stay private, and owners manage the policy, secrets, connectors and bridges.
+- **Teams.** Use it alone, or turn on sign-in in **Settings → Team** and invite teammates with one-time links. Everyone shares the agents and group chats, direct messages stay private, and owners manage the policy, secrets, connectors and bridges. See [Deployment](docs/guides/deployment.md).
 - **OpenTelemetry.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` to send the audit log as logs and each run as a trace to your observability stack.
 - **A shared folder.** `/shared` is visible to every agent and under **Connect apps → Files**, where you can upload files too.
 
@@ -70,6 +73,8 @@ Click **Create starter team** to add Lead, Researcher and Writer, then try:
 
 **Development:** `pnpm dev` runs the server on :8787 with reload and Vite on :5173 (open :5173).
 
+**No key yet?** Set `TEAMBOT_OFFLINE_MODELS=1` in `.env` and every agent answers with a free canned echo, so you can explore the interface. The [getting-started guide](docs/guides/getting-started.md) walks through the first run step by step.
+
 ### Self-host with Docker only
 
 ```bash
@@ -77,7 +82,21 @@ docker build -t teambot/computer:latest ./computer
 docker compose up -d --build   # → http://127.0.0.1:8787  (set TEAMBOT_PORT to change)
 ```
 
-Put your settings in `.env` next to `docker-compose.yml`. Data lives in the `teambot-data` and `teambot-shared` volumes.
+Put your settings in `.env` next to `docker-compose.yml`. Data lives in the `teambot-data` and `teambot-shared` volumes. To run it for a team on a server (sign-in, HTTPS, backups, upgrades), read [Deployment](docs/guides/deployment.md).
+
+## Documentation
+
+| Guide | |
+|---|---|
+| [Getting started](docs/guides/getting-started.md) | Install, create a team, give it work |
+| [Action policy](docs/guides/action-policy.md) | What agents may do alone, what needs you, with copy-ready rules |
+| [Routines and triggers](docs/guides/routines-and-triggers.md) | Schedules, webhooks, email, Slack and calendar triggers |
+| [Skills and memory](docs/guides/skills-and-memory.md) | Write or record procedures, and manage what agents remember |
+| [Connectors, MCP and chat apps](docs/guides/connectors.md) | App connectors, `mcp.json`, Telegram, Slack, coding agents |
+| [Pages and components](docs/guides/pages-and-components.md) | Co-edited documents, comments, and interfaces agents draw |
+| [Deployment](docs/guides/deployment.md) | Team sign-in, HTTPS, isolation, backups and upgrades |
+| [Troubleshooting](docs/guides/troubleshooting.md) | When an agent won't start, can't reach a site, or keeps asking |
+| [Project guide](docs/PROJECT_OVERVIEW.md) | How it all works, from the code up |
 
 ## How it works
 
@@ -120,6 +139,7 @@ All settings are environment variables (see [.env.example](.env.example)):
 | `TEAMBOT_MAX_CONCURRENT_RUNS` | `4` | Agents working at the same time. |
 | `TEAMBOT_COMPACT_AT_TOKENS` | `60000` | Transcript size at which a run's older steps are summarized by the utility model. |
 | `TEAMBOT_MAX_AGENT_DEPTH` | `6` | Agent-to-agent hops allowed without a human. |
+| `TEAMBOT_MAX_HANDOFFS_PER_RUN` | `4` | Teammates one run may hand work to (`ask_agent`, or @mentioning agents in a group chat). |
 | `TEAMBOT_OFFLINE_MODELS` | (off) | `1` makes every agent answer with a canned echo, for trying the app without a key or cost. |
 | `TEAMBOT_GENERATIVE_UI` | (on) | `0` stops agents from drawing interfaces they write themselves; published components still work. |
 | `TEAMBOT_MASTER_KEY` | auto-generated | 32-byte base64 key for secrets (otherwise `data/master.key`). |
@@ -153,7 +173,7 @@ apps/server     Fastify API, runtime, policy, vault, Docker computers, MCP (Type
 apps/web        React + Vite web app
 packages/shared Types shared by server and web
 computer/       The agent computer image and computerd (its tool API)
-docs/           Research and the feature map / roadmap
+docs/           Guides, the project guide, the feature map / roadmap and research (start at docs/README.md)
 ```
 
 ## Tests
@@ -163,13 +183,15 @@ pnpm test                                                  # unit + runtime test
 TEAMBOT_DOCKER_TESTS=1 pnpm --filter @teambot/server test  # plus an end-to-end run on a real agent computer
 ```
 
+CI runs `pnpm typecheck`, `pnpm test` and `pnpm build` on every pull request and push to `main`, and builds both Docker images when their inputs change. Pushing a `v*` tag that matches `package.json` publishes a GitHub Release with the source and the built web app.
+
 ## Roadmap
 
-See [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md). P0 and P1 are done; next is P2: agents talking to outside agents (A2A), agent identities, a plugin marketplace (skills, apps and agent templates) with vetting, SSO and finer roles.
+What has changed so far is in the [changelog](CHANGELOG.md). For what's next, see [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md). P0 and P1 are done; next is P2: agents talking to outside agents (A2A), agent identities, a plugin marketplace (skills, apps and agent templates) with vetting, SSO and finer roles.
 
 ## Contributing
 
-Contributions are welcome! Please see [contributions.md](contributions.md) for local development setup, architectural invariants, coding conventions, and PR guidelines.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup, architectural invariants, coding conventions, and PR guidelines.
 
 ## License
 

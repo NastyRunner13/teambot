@@ -334,7 +334,7 @@ Not done, on purpose: the database stays SQLite. One server with a small team fi
 
 - **A2A:** each agent publishes an Agent Card and can accept tasks from, or delegate to, external agents.
 - **Agent identities:** a dedicated email inbox per agent, and optionally its own SaaS accounts (Cue and Specialist Dots style).
-- ✅ **Learn by demonstration** (built 2026-10-05, see below): record yourself doing the task, and it becomes a draft skill.
+- ✅ **Learn by demonstration** (built 2026-10-05, see above): record yourself doing the task, and it becomes a draft skill.
 - **Self-improving skills**, with every skill change behind human review (see the "skill misevolution" research).
 - **Templates and marketplace** for agents and skills, with **skill vetting** (static scan plus sandboxed dry run). Plan: a *plugin* bundles skills, apps and agent templates, in Claude Code's plugin format (`.claude-plugin/plugin.json`, `skills/*/SKILL.md`, `.mcp.json`), installed from a git repository that lists plugins in `.claude-plugin/marketplace.json`. Remote servers in a plugin become connectors; local (stdio) servers run inside each agent's computer, not on the TeamBot host; commands and hooks have no TeamBot equivalent and are skipped.
 - ✅ **Agents add teammates** (built 2026-10-02, ahead of the rest of P2): `create_agent` proposes a permanent agent with its own role and instructions for an ongoing specialty no existing teammate covers, not for temporary or parallel work. The default policy asks a human first. The new agent gets its creator's network rules and budget caps, only skills and MCP servers the creator has, and no desktop or custom image. Each agent can have at most five such agents on the team at once.
