@@ -1,6 +1,6 @@
 # Contributing to TeamBot
 
-Thank you for your interest in contributing to TeamBot! TeamBot is an open-source office for AI agents where each agent gets its own computer and model, collaborating with team members and other agents in channels and on a task board under configurable governance rules.
+Thank you for your interest in contributing to TeamBot! TeamBot is an open-source office for AI agents where each agent gets its own computer and model, and works with people and other agents in chats and group chats under configurable governance rules.
 
 This document outlines guidelines and workflows for contributing to TeamBot.
 
@@ -15,6 +15,8 @@ This document outlines guidelines and workflows for contributing to TeamBot.
 - [Architecture & Safety Safeguards](#architecture--safety-safeguards)
 - [Coding Conventions & Style](#coding-conventions--style)
 - [Testing & Verification](#testing--verification)
+- [Continuous Integration & Releases](#continuous-integration--releases)
+- [Documentation](#documentation)
 - [Pull Request & Commit Guidelines](#pull-request--commit-guidelines)
 - [Reporting Security Issues](#reporting-security-issues)
 
@@ -78,6 +80,9 @@ We are committed to providing a welcoming, inclusive, and harassment-free enviro
    ```
    This runs the Fastify backend on port `8787` (via `tsx watch`) and Vite dev server on port `5173` (proxied to API). Open `http://localhost:5173`.
 
+6. **Check UI work without touching your workspace (optional):**
+   `.claude/launch.json` has a `teambot-verify` configuration: a server on port `8788` with its own data folder and offline models, serving `apps/web/dist`. Run `pnpm build` after UI changes, then start it to click through the change without spending credits.
+
 ---
 
 ## Repository & Monorepo Structure
@@ -133,6 +138,16 @@ When writing code that interacts with models, tools, or user data, you must main
    - Tools interrupted mid-flight must be recorded as explicit failures or "interrupted".
    - Never silently re-run interrupted tool executions on server recovery.
 
+7. **Sandboxed Interfaces:**
+   - Components and agent-drawn interfaces run in `WidgetFrame` with `sandbox="allow-scripts"` and a CSP with `connect-src 'none'`. Never add `allow-same-origin`.
+   - The API refuses non-GET requests with `Origin: null`; keep that check.
+
+8. **Read-only Runs:**
+   - Read-only runs are offered only tools with risk `read` or `readOnlyOk: true`. Never set `readOnlyOk` on a tool that changes memory, agents or anything outside the run.
+
+9. **Live Updates Need Events:**
+   - A server-side state change only reaches open browsers if it emits a `bus` event the web store handles. New kinds of model calls must emit cost events, or budgets won't see them.
+
 ---
 
 ## Coding Conventions & Style
@@ -149,6 +164,11 @@ When writing code that interacts with models, tools, or user data, you must main
 - **React & State Management:**
   - Zustand v5: Ensure selectors return stable references or use `useShallow` to prevent infinite re-render loops.
   - Dialogs: Use `data-autofocus` attribute on initial fields rather than HTML `autoFocus`.
+  - Effects: give effect bodies braces (`useEffect(() => { el.scrollIntoView(); })`). An arrow that returns a promise becomes React's cleanup and blanks the app.
+- **Validation:** zod `.partial()` keeps `.default()` values, so never build a PATCH schema from a create schema with defaults (see `agentFields`/`scheduleFields` in `api.ts`).
+- **Heavy dependencies:** load optional or large libraries lazily with `await import(...)` (the MCP SDK, imapflow, mailparser and ical.js already are).
+
+More pitfalls, with the reasons behind them, are listed under "Gotchas" in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -189,6 +209,43 @@ To run integration tests against a live Docker container:
 
 - Use `testApp()` from `apps/server/test/helpers.ts` to spin up an in-memory SQLite database, scripted model responses (`ScriptedProvider`), and `FakeComputers`.
 - Always clean up runtimes in `afterEach()` hooks (`await app.runtime.stop()`).
+- Drive scenarios by posting messages (`app.workspace.postMessage(...)`), then `await app.runtime.idle()`. Script model replies per agent with `models.script('test/<agentname>', [say(...), callTool(...)])`.
+- Test HTTP behaviour with `buildServer(app)` and `server.inject(...)`; team-mode tests keep a cookie per person.
+- Time-based sweeps take a time argument (for example `lifecycle.sweep(at)`), so tests never sleep.
+
+---
+
+## Continuous Integration & Releases
+
+GitHub Actions (`.github/workflows/`) runs on every pull request and every push to `main`:
+
+- **CI** (`ci.yml`): `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build` on Node 22. A PR must pass it.
+- **Docker** (`docker.yml`): builds (without pushing) the server image and the agent computer image when the `Dockerfile`, `computer/`, lockfile or workspace files change.
+- **Release** (`release.yml`): pushing a tag like `v0.2.0` runs CI again, checks that the tag matches `version` in `package.json`, and publishes a GitHub Release with the source plus the built web app and a SHA-256 checksum. Tags with a suffix (`v0.2.0-rc.1`) become pre-releases.
+
+To cut a release: move the entries under **Unreleased** in [`CHANGELOG.md`](CHANGELOG.md) into a new `## [0.2.0] - YYYY-MM-DD` section, bump `version` in `package.json`, merge both, then
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+---
+
+## Documentation
+
+Docs live next to the code they describe and are updated in the same pull request as the behaviour they cover:
+
+| Change | Update |
+|---|---|
+| Any user-visible change (added, changed, removed, fixed, security) | An entry under **Unreleased** in `CHANGELOG.md` |
+| A user-visible feature or setting | `README.md` and the matching guide in `docs/guides/` |
+| A new environment variable | `.env.example`, the README configuration table and `docs/PROJECT_OVERVIEW.md` |
+| How something works internally | `docs/PROJECT_OVERVIEW.md` and, for invariants coding agents must keep, `CLAUDE.md` |
+| Something on the roadmap is built | `docs/FEATURE_MAP.md` (matrix row and a dated section) |
+| UI patterns or tokens | `design.md` |
+
+Write plainly: short sentences, the names the UI uses in **bold**, and only behaviour you checked in the code. `docs/README.md` is the index; add new guides there.
 
 ---
 
@@ -212,6 +269,8 @@ Before submitting a PR, verify:
 - [ ] `pnpm build` succeeds for the web client.
 - [ ] New features include corresponding unit tests under `apps/server/test/`.
 - [ ] UI changes include before/after screenshots or recordings.
+- [ ] Docs are updated for any user-visible change (see [Documentation](#documentation)).
+- [ ] `CHANGELOG.md` has an entry under **Unreleased** for any user-visible change.
 - [ ] No temporary files, `.env`, `mcp.json`, or `data/` artifacts are committed.
 
 ---
@@ -224,4 +283,4 @@ Security and isolation are critical to TeamBot. If you discover a vulnerability 
 - Prompt injection exploitation
 - Authentication or private DM bypass
 
-Please report it responsibly to the project maintainers rather than opening a public issue. We appreciate your assistance in keeping TeamBot secure.
+Please report it privately rather than opening a public issue, for example through a private security advisory on the GitHub repository (Security tab → Report a vulnerability). Include the version or commit, steps to reproduce and the impact you see. We appreciate your assistance in keeping TeamBot secure.

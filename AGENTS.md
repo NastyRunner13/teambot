@@ -9,7 +9,7 @@ TeamBot is a self-hosted workspace for AI agents with isolated Docker computers.
 - `apps/web/src/`: React views, reusable components, state, and `styles.css`.
 - `packages/shared/src/`: domain types consumed directly as TypeScript.
 - `computer/`: container image, startup scripts, and the `computerd` tool API.
-- `docs/`: research and roadmap. Check `docs/FEATURE_MAP.md` before proposing features; read `design.md` before UI changes.
+- `docs/`: guides (`docs/guides/`), the project guide (`docs/PROJECT_OVERVIEW.md`), the roadmap and research; `docs/README.md` is the index. Check `docs/FEATURE_MAP.md` before proposing features; read `design.md` before UI changes. `CLAUDE.md` has the architecture notes and gotchas.
 
 ## Build, test, and development commands
 
@@ -35,7 +35,7 @@ Run a focused suite with `pnpm --filter @teambot/server exec vitest run test/pol
 
 ## Commit & pull request guidelines
 
-No commits exist yet. Use concise, imperative subjects such as `Fix approval resume handling`. Keep changes focused. PRs should describe behavior changes, link relevant issues, report validation, and include screenshots for UI changes. Run typechecking, tests, and the web build before review.
+Use concise, imperative subjects such as `Fix approval resume handling`. Keep changes focused. PRs should describe behavior changes, link relevant issues, report validation, and include screenshots for UI changes. CI (`.github/workflows/ci.yml`) runs `pnpm typecheck`, `pnpm test` and `pnpm build` on every PR; run them locally first. Update `CHANGELOG.md` (under Unreleased), the README, the matching guide in `docs/guides/` and `docs/FEATURE_MAP.md` in the same PR as a user-visible change. Pushing a `v*` tag matching `package.json` publishes a release.
 
 ## Configuration & architecture safeguards
 
