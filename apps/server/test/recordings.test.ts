@@ -7,7 +7,7 @@ import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
 import { callTool, say } from '../src/models/scripted.js';
 import type { ChatRequest, ContentPart, TranscriptMessage } from '../src/models/types.js';
-import { MAX_ACTIONS, MAX_FRAMES, skillNameFrom } from '../src/recordings.js';
+import { MAX_ACTIONS, MAX_FRAMES, safeUrl, skillNameFrom } from '../src/recordings.js';
 import { startOfDay } from '../src/runtime/budget.js';
 import { addAgent, general, testApp } from './helpers.js';
 
@@ -101,7 +101,7 @@ describe('recording a demonstration', () => {
     computers.recorder[ops.id].events.push({ seq: 12, t: 9000, kind: 'navigate', url: 'https://expenses.example.com/done?ok=1', title: 'Saved' });
     await app.recordings.collect(rec.id);
     const frames = app.recordings.get(rec.id).frameList;
-    expect(frames).toEqual([{ file: '1.jpg', t: expect.any(Number), url: 'https://expenses.example.com/done?ok=1', title: 'Expenses' }]);
+    expect(frames).toEqual([{ file: '1.jpg', t: expect.any(Number), url: 'https://expenses.example.com/done?ok=…', title: 'Expenses' }]);
     expect(fs.readFileSync(path.join(app.recordings.dir(rec.id), '1.jpg'), 'utf8')).toBe('still of https://expenses.example.com/done?ok=1');
     // The query string doesn't make it another page: still the page of the secret.
     computers.stillUrl = `${PAGE}?step=2`;
@@ -224,6 +224,72 @@ describe('recording a demonstration', () => {
     expect(skillNameFrom('  --Hello, World--  ')).toBe('hello-world');
     expect(skillNameFrom('a'.repeat(80))).toHaveLength(64);
     expect(skillNameFrom('!!!')).toBe('');
+  });
+});
+
+describe('secrets in addresses', () => {
+  it('keeps an address without query values, fragments or token-like path segments', () => {
+    expect(safeUrl('https://expenses.example.com/new?email=ada%40example.com&pw=hunter2#step=2')).toBe('https://expenses.example.com/new?email=…&pw=…');
+    expect(safeUrl('https://app.example.com/auth/callback?code=abc&state=xyz#access_token=eyJhbGciOi')).toBe('https://app.example.com/auth/callback?code=…&state=…');
+    expect(safeUrl('https://app.example.com/reset/7f3a9c2b8e1d4f6a9b0c1d2e')).toBe('https://app.example.com/reset/…');
+    expect(safeUrl('https://app.example.com/invite/dGhpc0lzQVNlY3JldDEyMw')).toBe('https://app.example.com/invite/…');
+    expect(safeUrl('https://user:pass@app.example.com/x')).toBe('https://app.example.com/x');
+    // Names and ordinary slugs stay.
+    expect(safeUrl('https://example.com/reports/q3-2026-sales-report/edit')).toBe('https://example.com/reports/q3-2026-sales-report/edit');
+    expect(safeUrl('https://example.com/search?q=taxi&q=meal&page=2')).toBe('https://example.com/search?q=…&page=…');
+    expect(safeUrl('https://example.com/')).toBe('https://example.com/');
+    expect(safeUrl('data:text/html,<b>secret</b>')).toBe('data:…');
+    expect(safeUrl('about:blank#x')).toBe('about:blank');
+    expect(safeUrl('not a url?token=1')).toBe('not a url');
+  });
+
+  it('never keeps the password a GET form puts in the next address, in the log, a still or the prompt', async () => {
+    const t = setup();
+    const { app, computers, models, ops, owner } = t;
+    const rec = await app.recordings.begin(ops, owner);
+    const next = 'https://expenses.example.com/new?email=ada%40example.com&pw=hunter2-in-url';
+    computers.recorder[ops.id].events.push(
+      { seq: 1, t: 1, kind: 'navigate', url: 'https://expenses.example.com/login', title: 'Sign in' },
+      { seq: 2, t: 2, kind: 'type', url: 'https://expenses.example.com/login', target: target('Password', 'password'), value: null, sensitive: true },
+      { seq: 3, t: 3, kind: 'navigate', url: next, title: 'New expense' },
+      { seq: 4, t: 4, kind: 'click', url: next, target: { role: 'button', name: 'Submit', tag: 'button', type: '' } },
+    );
+    computers.stillUrl = next;
+    await app.recordings.collect(rec.id);
+    models.script('test/utility', [say(DRAFT())]);
+    await app.recordings.end(rec.id, owner.id);
+    const done = await app.recordings.draft(rec.id, owner.id);
+    expect(JSON.stringify(done)).not.toContain('hunter2-in-url');
+    expect(done.log[2].url).toBe('https://expenses.example.com/new?email=…&pw=…');
+    expect(done.frameList.map((f) => f.url)).toEqual(['https://expenses.example.com/new?email=…&pw=…', 'https://expenses.example.com/new?email=…&pw=…']);
+    expect(JSON.stringify(models.requests.find((r) => r.model === 'test/utility'))).not.toContain('hunter2-in-url');
+  });
+
+  it('keeps no still of a page whose address carries a stored secret', async () => {
+    const t = setup();
+    const { app, computers, ops, owner } = t;
+    app.vault.set('SHARE_TOKEN', 'share-0123456789');
+    const rec = await app.recordings.begin(ops, owner);
+    computers.stillUrl = 'https://docs.example.com/view?share=share-0123456789';
+    computers.recorder[ops.id].events.push({ seq: 1, t: 1, kind: 'navigate', url: computers.stillUrl, title: 'Doc' });
+    await app.recordings.collect(rec.id);
+    const got = app.recordings.get(rec.id);
+    expect(got.frameList).toEqual([]);
+    expect(got.log[0]).toMatchObject({ url: 'https://docs.example.com/view?share=…', secrets: ['SHARE_TOKEN'] });
+  });
+
+  it('keeps no still when a password is typed on that page while the still is being taken', async () => {
+    const t = setup();
+    const { app, computers, ops, owner } = t;
+    const rec = await app.recordings.begin(ops, owner);
+    computers.stillUrl = 'https://expenses.example.com/login';
+    computers.recorder[ops.id].events.push({ seq: 1, t: 1, kind: 'navigate', url: computers.stillUrl, title: 'Sign in' });
+    computers.onStill = () =>
+      computers.recorder[ops.id].events.push({ seq: 2, t: 2, kind: 'type', url: computers.stillUrl!, target: target('Password', 'password'), value: null, sensitive: true });
+    await app.recordings.collect(rec.id);
+    const got = app.recordings.get(rec.id);
+    expect(got.frameList).toEqual([]);
+    expect(got.log.map((a) => a.seq)).toEqual([1, 2]);
   });
 });
 

@@ -70,6 +70,42 @@ interface Still {
 
 const summary = ({ log: _log, frameList: _frames, draft: _draft, dropped: _dropped, ...rest }: Recording): RecordingSummary => rest;
 
+/** A path segment that looks like a token (a reset, invite or magic link) rather than a name. */
+const looksLikeToken = (s: string) =>
+  s.length >= 40 ||
+  (s.length >= 20 && /[A-Za-z]/.test(s) && /\d/.test(s) && ((/[A-Z]/.test(s) && /[a-z]/.test(s)) || /(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{12,}/.test(s)));
+
+/**
+ * An address as a recording keeps it, without what could be a secret: query values and the fragment go (their names
+ * stay, so the shape is still clear, and what was typed is in the log anyway), and so do path segments that look like
+ * tokens. The password a GET form puts in the next address, a ?code= or an #access_token= never reach the log, a
+ * still's caption or the model.
+ */
+export function safeUrl(raw: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return raw.replace(/[?#][\s\S]*$/, '');
+  }
+  if (u.protocol === 'data:' || u.protocol === 'blob:' || u.protocol === 'javascript:') return `${u.protocol}…`;
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return raw.replace(/[?#][\s\S]*$/, '');
+  const path = u.pathname
+    .split('/')
+    .map((segment) => {
+      let text = segment;
+      try {
+        text = decodeURIComponent(segment);
+      } catch {
+        // Not valid percent-encoding: judge it as it is.
+      }
+      return looksLikeToken(text) ? '…' : segment;
+    })
+    .join('/');
+  const names = [...new Set(u.searchParams.keys())];
+  return `${u.origin}${path}${names.length ? `?${names.map((n) => `${encodeURIComponent(n)}=…`).join('&')}` : ''}`;
+}
+
 /** The page an address is on, ignoring the query and fragment (where a still may show what was typed). */
 function pageOf(url: string): string {
   try {
@@ -244,7 +280,8 @@ export class Recordings {
       return vault.redact(text.replace(/\u0000/g, ''));
     };
     const sensitive = e.sensitive === true || e.target?.type === 'password';
-    const action: RecordedAction = { seq: e.seq, t: Math.round(e.t), kind: e.kind, url: scrub(e.url) };
+    // Stored secrets are looked for in the whole address first, so a page reached through one counts as a secret page.
+    const action: RecordedAction = { seq: e.seq, t: Math.round(e.t), kind: e.kind, url: safeUrl(scrub(e.url)) };
     if (e.title) action.title = scrub(e.title).slice(0, 200);
     if (e.target) action.target = { role: scrub(e.target.role), name: scrub(e.target.name).slice(0, 120), tag: e.target.tag, type: e.target.type };
     if (e.kind === 'type' || e.kind === 'select' || e.kind === 'upload') {
@@ -280,14 +317,21 @@ export class Recordings {
     return new Set(rec.log.filter((a) => a.sensitive || a.secrets?.length).map((a) => pageOf(a.url)));
   }
 
-  /** Keep a still of what the person sees, unless the stills are used up or a secret was typed on that page. */
+  /**
+   * Keep a still of what the person sees, unless the stills are used up, a secret was typed on that page (up to the
+   * moment the still was taken), or its address carries a stored secret.
+   */
   private async still(id: string, computer: ComputerHandle): Promise<void> {
     const rec = this.app.store.getRecording(id);
     if (!rec || rec.frameList.length >= MAX_FRAMES) return;
     const shot = await computer.call<Still | null>('/record/screenshot', {}, { timeoutMs: 30_000 }).catch(() => null);
     if (!shot?.image) return;
-    const url = this.app.vault.redact(String(shot.url ?? ''));
-    // Read again: actions collected while the still was taken may have marked this page.
+    const raw = String(shot.url ?? '');
+    if (this.app.vault.redact(raw) !== raw) return;
+    const url = safeUrl(raw);
+    // What happened while the still was taken counts too: a password typed just then makes this a secret page.
+    const late = await computer.call<Collected>('/record/events', {}, { timeoutMs: 15_000 }).catch(() => null);
+    if (late?.id === id && late.recording) this.append(id, Array.isArray(late.events) ? late.events : [], Number(late.dropped) || 0);
     const latest = this.app.store.getRecording(id);
     if (!latest || latest.frameList.length >= MAX_FRAMES || this.secretPages(latest).has(pageOf(url))) return;
     const file = `${latest.frameList.length + 1}.jpg`;

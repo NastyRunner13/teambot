@@ -36,6 +36,8 @@ export class FakeComputers implements ComputerProvider {
    */
   recorder: Record<string, { id: string | null; events: unknown[]; dropped: number }> = {};
   stillUrl: string | null = 'https://expenses.example.com/new';
+  /** Runs while a recording still is taken, e.g. to make the person type something at that moment. */
+  onStill: (() => void) | null = null;
   /** Set to make starting a recording fail. */
   failRecordStart = false;
 
@@ -129,6 +131,7 @@ export class FakeComputers implements ComputerProvider {
             return out as T;
           }
           if (p === '/record/screenshot') {
+            self.onStill?.();
             return (self.stillUrl ? { image: Buffer.from(`still of ${self.stillUrl}`).toString('base64'), mime: 'image/jpeg', url: self.stillUrl, title: 'Expenses' } : null) as T;
           }
         }
