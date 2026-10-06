@@ -430,6 +430,106 @@ export interface Skill extends SkillSummary {
   content: string;
 }
 
+/**
+ * One thing a person did while recording a demonstration on an agent's computer. Anything they typed that matches a
+ * stored secret shows as its {{secret:NAME}} placeholder; a password (or other secret-looking) field's value is never
+ * recorded at all.
+ */
+export interface RecordedAction {
+  /** Order within the recording, from 1. */
+  seq: number;
+  /** Milliseconds since the recording started. */
+  t: number;
+  kind: 'navigate' | 'click' | 'type' | 'select' | 'check' | 'upload' | 'press';
+  url: string;
+  title?: string;
+  /** What it touched, labelled the way browser_snapshot labels elements. */
+  target?: { role: string; name: string; tag: string; type: string };
+  /** What was typed or chosen; null for a secret field. */
+  value?: string | null;
+  /** A password or other secret field: something was typed, and what it was is not known. */
+  sensitive?: boolean;
+  /** Names of stored secrets whose values were typed here (shown as placeholders in `value`). */
+  secrets?: string[];
+  checked?: boolean;
+  key?: string;
+}
+
+/** A still from a recording (fields covered over), stored under the data folder with the draft. */
+export interface RecordingFrame {
+  file: string;
+  t: number;
+  url: string;
+  title: string;
+}
+
+/** recording → drafting → ready (or failed, which can be drafted again). Saving the draft as a skill removes it. */
+export type RecordingStatus = 'recording' | 'drafting' | 'ready' | 'failed';
+
+/**
+ * Learning by demonstration: a person records a task on an agent's computer and TeamBot drafts a skill from it. The
+ * draft reaches no agent until a person saves it as a skill.
+ */
+export interface RecordingSummary {
+  id: string;
+  /** Whose computer it was recorded on. */
+  agentId: string;
+  status: RecordingStatus;
+  /** The skill name the draft is meant for (lowercase words with hyphens); empty until known. */
+  name: string;
+  /** What the person said they were doing. */
+  description: string;
+  startedBy: string;
+  startedAt: string;
+  stoppedAt: string | null;
+  updatedAt: string;
+  /** How many actions and stills it holds. */
+  actions: number;
+  frames: number;
+  error: string | null;
+}
+
+export interface Recording extends RecordingSummary {
+  log: RecordedAction[];
+  frameList: RecordingFrame[];
+  /** The SKILL.md draft, front matter included; empty until drafted. */
+  draft: string;
+  /** Actions the computer couldn't keep (too many at once), so the log has gaps. */
+  dropped: number;
+}
+
+/** A recording stops by itself after this long. */
+export const MAX_RECORDING_MS = 10 * 60_000;
+
+/** m:ss from the start of a recording. */
+export function recordingClock(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** One recorded action as a line of text, for the log people review and the model that drafts the skill. */
+export function describeAction(a: RecordedAction): string {
+  const what = a.target ? `${a.target.role} "${a.target.name}"` : 'the page';
+  const value = JSON.stringify(a.value ?? '');
+  switch (a.kind) {
+    case 'navigate':
+      return `Opened ${a.url}${a.title ? ` ("${a.title}")` : ''}`;
+    case 'click':
+      return `Clicked ${what}`;
+    case 'type':
+      if (a.sensitive) return `Typed a password or other secret into ${what} (the value was not recorded)`;
+      return a.value ? `Typed ${value} into ${what}` : `Cleared ${what}`;
+    case 'select':
+      return a.sensitive ? `Chose an option in ${what} (not recorded: the field holds a secret)` : `Chose ${value} in ${what}`;
+    case 'check':
+      return `${a.checked ? 'Ticked' : 'Unticked'} ${what}`;
+    case 'upload':
+      return `Picked the file ${value} for ${what}`;
+    case 'press':
+      return `Pressed ${a.key}${a.target ? ` in ${what}` : ''}`;
+  }
+}
+
 export type RoutineTrigger = 'schedule' | 'webhook' | 'email' | 'slack' | 'calendar';
 export const ROUTINE_TRIGGERS: RoutineTrigger[] = ['schedule', 'webhook', 'email', 'slack', 'calendar'];
 
@@ -567,6 +667,8 @@ export interface Bootstrap {
   activeRuns: Run[];
   schedules: Schedule[];
   skills: SkillSummary[];
+  /** Skill drafts from recordings this person may see (their own; an owner sees all). */
+  recordings: RecordingSummary[];
   secrets: string[];
   pausedAll: boolean;
   health: Health;

@@ -28,6 +28,7 @@ import { Auth } from './auth.js';
 import { PageComments } from './comments.js';
 import { ComponentLibrary } from './components.js';
 import { Pages } from './pages.js';
+import { Recordings } from './recordings.js';
 import { ToolRegistry } from './tools/registry.js';
 import { Vault } from './vault.js';
 import { Workspace } from './workspace.js';
@@ -60,6 +61,7 @@ export interface App {
   pages: Pages;
   comments: PageComments;
   components: ComponentLibrary;
+  recordings: Recordings;
 }
 
 export interface AppOverrides {
@@ -73,6 +75,8 @@ export interface AppOverrides {
   telemetry?: ConstructorParameters<typeof Telemetry>[1];
   /** Fake mail and calendar sources for tests. */
   triggers?: ConstructorParameters<typeof Triggers>[1];
+  /** Recording options for tests (pollMs: 0 collects only when asked). */
+  recordings?: ConstructorParameters<typeof Recordings>[1];
 }
 
 export function createApp(cfg: Config, overrides: AppOverrides = {}): App {
@@ -111,6 +115,7 @@ export function createApp(cfg: Config, overrides: AppOverrides = {}): App {
   app.snapshots = new Snapshots(app);
   app.triggers = new Triggers(app, overrides.triggers);
   app.auth = new Auth(app);
+  app.recordings = new Recordings(app, overrides.recordings);
 
   seed(app);
   return app;
@@ -131,6 +136,7 @@ export async function startApp(app: App) {
   app.lifecycle.start();
   app.egress.start();
   app.triggers.start();
+  app.recordings.start();
   // Not awaited: an unreachable Telegram must not hold up startup.
   void app.telegram.start().catch((err) => console.error('telegram bridge failed to start', err));
   void app.slack.start().catch((err) => console.error('slack bridge failed to start', err));
@@ -141,6 +147,7 @@ export async function stopApp(app: App) {
   await app.slack.stop();
   await app.egress.stop();
   app.triggers.stop();
+  app.recordings.stop();
   app.lifecycle.stop();
   app.cron.stop();
   await app.runtime.stop();

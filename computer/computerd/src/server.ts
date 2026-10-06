@@ -41,6 +41,11 @@ const routes: Record<string, Handler> = {
   'POST /browser/back': () => browser.back(),
   'POST /browser/tabs': () => browser.tabs(),
   'POST /browser/switch_tab': (b) => browser.switchTab(Number(b.index)),
+  // Recording a person's demonstration (while they have control): start, collect what happened, stop.
+  'POST /record/start': (b) => browser.startRecording(String(b.id ?? '')),
+  'POST /record/events': async () => browser.recordedEvents(),
+  'POST /record/stop': () => browser.stopRecording(),
+  'POST /record/screenshot': () => browser.recordingScreenshot(),
   'POST /desktop/screenshot': () => desktop.screenshot(),
   'POST /desktop/click': (b) => desktop.click(b),
   'POST /desktop/type': (b) => desktop.type(b),

@@ -7,6 +7,7 @@ import type { Agent, ComputerStatus } from '@teambot/shared';
 import { api, wsUrl } from '../api';
 import { useStore } from '../store';
 import { Avatar } from './Avatar';
+import { RecordControl, useActiveRecording } from './RecordControl';
 
 type Info = ComputerStatus & { vncPassword: string };
 
@@ -62,6 +63,7 @@ function VncCanvas({ agentId, password, viewOnly }: { agentId: string; password:
 export function Screen({ agent, compact = false }: { agent: Agent; compact?: boolean }) {
   const notify = useStore((s) => s.notify);
   const approvals = useStore((s) => s.approvals);
+  const recording = useActiveRecording(agent.id);
   const [info, setInfo] = useState<Info | null>(null);
   const [busy, setBusy] = useState(false);
   const [control, setControl] = useState(false);
@@ -101,6 +103,8 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
     if (hasControl) {
       setControl(false);
       if (agent.takeoverBy) await act('handback', 'Hand back');
+      // Handing back ends a recording; its draft is written under Skills.
+      if (recording) notify('Recording stopped. The draft skill is being written: find it under Skills.');
     } else {
       setControl(true);
       if (!waitingForHuman) await act('takeover', 'Take over');
@@ -108,7 +112,13 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
   }
 
   const running = info?.state === 'running';
-  const hint = hasControl ? (waitingForHuman ? 'You are driving. Finish the step, then answer the request.' : `You are driving; ${agent.name} is paused.`) : 'Watching live (view only)';
+  const hint = recording
+    ? 'Recording what you do in the browser. Press Stop when the task is done.'
+    : hasControl
+      ? waitingForHuman
+        ? 'You are driving. Finish the step, then answer the request.'
+        : `You are driving; ${agent.name} is paused.`
+      : 'Watching live (view only)';
   // One live connection at a time: while expanded, only the expanded view shows the screen.
   const live = running && info ? <VncCanvas agentId={agent.id} password={info.vncPassword} viewOnly={!hasControl} /> : null;
   const offline = (
@@ -152,6 +162,7 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
           <button className={`btn ${hasControl ? 'primary' : ''} sm`} onClick={toggleControl} disabled={busy}>
             <Hand size={13} /> {hasControl ? 'Hand back to agent' : 'Take control'}
           </button>
+          <RecordControl agent={agent} onStarted={() => setControl(true)} />
           <span className="small muted grow">{hint}</span>
           <button className="btn sm icon" onClick={() => setExpanded(true)} aria-label="Expand the screen" title="Expand">
             <Maximize2 size={13} />
@@ -183,6 +194,7 @@ export function Screen({ agent, compact = false }: { agent: Agent; compact?: boo
               <span className="ellipsis">{agent.name}</span>
             </span>
             <div className="screen-full-actions">
+              {running && <RecordControl agent={agent} onStarted={() => setControl(true)} />}
               {running && (
                 <button className={`btn sm pill ${hasControl ? 'primary' : ''}`} onClick={toggleControl} disabled={busy}>
                   <Hand size={13} /> {hasControl ? 'Hand back' : 'Take control'}
