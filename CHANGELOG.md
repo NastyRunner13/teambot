@@ -4,6 +4,9 @@ All notable changes to TeamBot are recorded here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+- Offline model mode now appears as **Offline (echo)** in Settings and no longer shows the missing-key warning; the banner explains how to switch to real models.
+
 ## [0.1.0] - 2026-10-10
 
 The first release.

@@ -41,7 +41,7 @@ export function SettingsShell({ active, fill, children }: { active: Section; fil
   const health = useStore((s) => s.health);
   const installed = useStore((s) => s.health?.mcpServers.length ?? 0);
   const skills = useStore((s) => s.skills.length);
-  const systemProblem = !!health && (!health.openrouterKey || !health.docker || !health.computerImage);
+  const systemProblem = !!health && ((!health.openrouterKey && !health.offlineModels) || !health.docker || !health.computerImage);
   const signInNeeded = useStore((s) => s.health?.mcpServers.some((m) => m.needsSignIn || (!m.connected && m.error)) ?? false);
   const counts: Partial<Record<Section, number>> = { installed, skills };
   const alerts: Partial<Record<Section, boolean>> = { system: systemProblem, installed: signInNeeded };

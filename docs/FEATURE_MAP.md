@@ -260,6 +260,7 @@ No single product, open or closed, covers all six of these:
 | OAuth app connectors | ✅ Remote MCP servers added under Connect apps with OAuth sign-in (discovery, dynamic client registration, PKCE and refresh via the MCP SDK), or with a pasted token sent in a header (GitHub). A marketplace lists about 35 vendors' own servers, checked to accept TeamBot's sign-in; anything else is added by URL. Credentials are reserved secrets; each app's page switches agents on or off, and calls default to `ask`. |
 | Multi-user workspace | ✅ Off by default. Team sign-in (name and password, scrypt, HttpOnly cookie sessions), one-time invite links, owner and member roles, actions attributed to the signed-in person, private DMs, owner-only settings. |
 | OpenTelemetry export | ✅ OTLP/HTTP JSON without an SDK: the audit log as logs, each run as a trace with tool and model spans. |
+| Offline model setup status | ✅ `TEAMBOT_OFFLINE_MODELS=1` is shown as **Offline (echo)** in System; the banner explains how to switch to real models instead of reporting a missing OpenRouter key. |
 
 Not done, on purpose: the database stays SQLite. One server with a small team fits it well; Postgres moves to P2 together with SSO and finer roles.
 

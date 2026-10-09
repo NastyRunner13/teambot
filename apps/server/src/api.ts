@@ -291,6 +291,7 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
     return {
       ok: true,
       openrouterKey: !!cfg.openrouterKey,
+      offlineModels: cfg.offlineModels,
       docker,
       computerImage: image,
       computerImageName: cfg.computerImage,

@@ -73,7 +73,7 @@ Click **Create starter team** to add Lead, Researcher and Writer, then try:
 
 **What it costs:** you pay OpenRouter for the models, nothing else. In real use, a typical job for one agent (message to reply) took 30,000 to 90,000 input tokens, which is about $0.05 to $0.20 on Claude Sonnet 5.5 at list price; long browsing jobs can pass $1. A job like the one above, across three agents, usually stays under a dollar. Smaller models cost a fraction of that, and [budgets](#what-you-get) cap what each agent may spend.
 
-**No key yet?** Set `TEAMBOT_OFFLINE_MODELS=1` in `.env` and every agent answers with a free canned echo, so you can explore the interface. The [getting-started guide](docs/guides/getting-started.md) walks through the first run step by step.
+**No key yet?** Set `TEAMBOT_OFFLINE_MODELS=1` in `.env` and every agent answers with a free canned echo, so you can explore the interface. The app labels this mode **Offline (echo)** and explains how to switch to real models. The [getting-started guide](docs/guides/getting-started.md) walks through the first run step by step.
 
 ### From source
 
@@ -119,7 +119,7 @@ All settings are environment variables (see [.env.example](.env.example)):
 
 | Variable | Default | |
 |---|---|---|
-| `OPENROUTER_API_KEY` | (none) | Required. |
+| `OPENROUTER_API_KEY` | (none) | Required unless `TEAMBOT_OFFLINE_MODELS=1`. |
 | `TEAMBOT_DEFAULT_MODEL` | `anthropic/claude-sonnet-5.5` | Model for new agents. |
 | `TEAMBOT_UTILITY_MODEL` | `openai/gpt-6-luna` | Cheap model used to summarize long runs. |
 | `TEAMBOT_REVIEWER_MODEL` | the utility model | Model that judges actions sent to it by `review` policy rules. |

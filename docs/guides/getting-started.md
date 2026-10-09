@@ -107,7 +107,7 @@ Set this in `.env` and restart:
 TEAMBOT_OFFLINE_MODELS=1
 ```
 
-Every agent then answers with a canned echo instead of calling OpenRouter. Use it to explore the interface, set up routines or try the policy editor without cost. It can't show you real agent behaviour.
+Every agent then answers with a canned echo instead of calling OpenRouter. The banner and **Settings → System** identify this as **Offline (echo)** and explain how to switch to real models. Use it to explore the interface, set up routines or try the policy editor without cost. It can't show you real agent behaviour.
 
 ## Development mode
 

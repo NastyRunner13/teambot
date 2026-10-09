@@ -23,6 +23,16 @@ async function setup() {
 }
 
 describe('HTTP API', () => {
+  it('reports offline model mode in health when no OpenRouter key is configured', async () => {
+    const { app, server } = await setup();
+    app.cfg.offlineModels = true;
+    app.cfg.openrouterKey = '';
+
+    const response = await server.inject({ method: 'GET', url: '/api/health' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ offlineModels: true, openrouterKey: false });
+  });
+
   it('PATCH only changes the fields it is given', async () => {
     const { server } = await setup();
     const created = (
