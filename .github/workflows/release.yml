@@ -79,6 +79,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
+        with:
+          # Base images come through Google's Docker Hub mirror first: Docker Hub rate-limits anonymous pulls from
+          # shared runners (HTTP 429). BuildKit falls back to Docker Hub when the mirror doesn't have an image.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       # Pushed by digest only; the merge job below gives the platforms one tag.
       - uses: docker/build-push-action@v6
         id: build
