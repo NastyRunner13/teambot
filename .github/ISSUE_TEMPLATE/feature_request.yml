@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest something TeamBot should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: The roadmap is in [docs/FEATURE_MAP.md](https://github.com/NastyRunner13/teambot/blob/main/docs/FEATURE_MAP.md). If your idea is already there, say how you'd use it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to get done, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: How it could work, from your side. Screens, commands or a rough flow all help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds you use now, or how other tools handle it.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself.

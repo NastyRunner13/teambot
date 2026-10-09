@@ -375,9 +375,19 @@ function System() {
         </SettingRow>
         <SettingRow
           title="Agent computer image"
-          description={health.computerImage ? "The image agents' computers start from." : <>Build it with <span className="mono">pnpm computer:build</span>.</>}
+          description={
+            health.computerImage || health.computerImagePulling ? (
+              <>
+                The image agents' computers start from: <span className="mono">{health.computerImageName}</span>.
+              </>
+            ) : (
+              <>
+                Run <span className="mono">pnpm computer:build</span>, or <span className="mono">docker pull {health.computerImageName}</span>.
+              </>
+            )
+          }
         >
-          <Status ok={health.computerImage}>{health.computerImage ? 'Built' : 'Missing'}</Status>
+          <Status ok={health.computerImage}>{health.computerImage ? 'Ready' : health.computerImagePulling ? 'Downloading…' : 'Missing'}</Status>
         </SettingRow>
       </SettingGroup>
       <SettingGroup title="Models">

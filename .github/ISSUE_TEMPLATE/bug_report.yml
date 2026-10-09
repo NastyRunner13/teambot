@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in TeamBot doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! For a security problem, please don't open an issue: use [private reporting](https://github.com/NastyRunner13/teambot/security/advisories/new) instead (see SECURITY.md).
+        Before posting logs or screenshots, remove API keys, secrets and anything private.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create the starter team
+        2. Ask @Researcher to …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release (e.g. 0.1.0) or the commit you run (`git rev-parse --short HEAD`).
+    validations:
+      required: true
+  - type: dropdown
+    id: how
+    attributes:
+      label: How you run it
+      options:
+        - Docker Compose (released images)
+        - Docker Compose (built from source)
+        - From source (pnpm start / pnpm dev)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and Docker
+      placeholder: macOS 26 (Apple silicon), Docker Desktop 4.x
+  - type: input
+    id: model
+    attributes:
+      label: Model(s) involved
+      description: If an agent misbehaved, which OpenRouter model it was using.
+      placeholder: anthropic/claude-sonnet-5.5
+  - type: dropdown
+    id: team
+    attributes:
+      label: Team sign-in
+      options:
+        - "Off (personal workspace)"
+        - "On"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The server's output (`docker compose logs teambot` with Compose), browser console errors, or the run's log from the chat.
+      render: text

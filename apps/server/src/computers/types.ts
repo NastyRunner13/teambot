@@ -22,6 +22,10 @@ export interface ComputerSpec {
 export interface ComputerProvider {
   available(): Promise<boolean>;
   imageReady(image?: string): Promise<boolean>;
+  /** Whether the image is being downloaded right now. */
+  imagePulling(image?: string): boolean;
+  /** Download the image if it is missing and one TeamBot publishes (emits `computer.image`). Throws for any other. */
+  pullImage(image?: string): Promise<void>;
   status(agentId: string): Promise<ComputerStatus>;
   /** Create/start the agent's computer if needed and wait until it is healthy. */
   ensure(agentId: string, spec?: ComputerSpec): Promise<ComputerHandle>;

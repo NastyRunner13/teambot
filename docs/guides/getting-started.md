@@ -1,21 +1,19 @@
 # Getting started
 
-This guide takes you from a fresh clone to a team of agents doing work you can watch. It takes about 15 minutes, most of which is Docker building the agent computer image.
+This guide takes you from nothing to a team of agents doing work you can watch. It takes about 10 minutes, most of which is downloading the agent computer image.
 
 ## 1. What you need
 
-- **Node.js 22.13 or newer.** The server uses Node's built-in SQLite (`node:sqlite`), which older versions don't have.
-- **pnpm 10.** `corepack enable` installs the version pinned in `package.json`.
 - **Docker.** Docker Desktop on Windows and macOS, Docker Engine on Linux. Each agent's computer is a container. You can try the app without Docker, but agents won't be able to browse, run commands or write files.
 - **An OpenRouter API key** from [openrouter.ai/keys](https://openrouter.ai/keys). Every agent thinks through OpenRouter, so one key gives you Claude, GPT, Gemini, Grok, DeepSeek, Qwen and the rest. To look around without a key or any cost, see [Try it without a key](#try-it-without-a-key).
 
 ## 2. Install and start
 
+The quickest way is Docker alone:
+
 ```bash
 git clone https://github.com/NastyRunner13/teambot.git
 cd teambot
-pnpm install
-pnpm computer:build      # the agent computer image: about 2 GB, a few minutes the first time
 cp .env.example .env     # on Windows PowerShell: Copy-Item .env.example .env
 ```
 
@@ -25,14 +23,27 @@ Open `.env` and set your key:
 OPENROUTER_API_KEY=sk-or-...
 ```
 
-Then build the web app and start the server:
+Then start it:
 
 ```bash
-pnpm build
+docker compose up -d
+```
+
+Open **http://127.0.0.1:8787**. Compose pulls the released server image, and the server then downloads the agent computer image (about 2 GB unpacked, once); a banner shows while it does. Your data lives in the `teambot-data` and `teambot-shared` Docker volumes. `docker compose logs -f` shows the server's output.
+
+### From source
+
+To change TeamBot or follow `main`, run it with **Node.js 22.13 or newer** (the server uses Node's built-in SQLite) and **pnpm 10** (`corepack enable` installs the pinned version). After cloning and setting up `.env` as above:
+
+```bash
+pnpm install
+pnpm build               # the web app
 pnpm start
 ```
 
-Open **http://127.0.0.1:8787**. The server prints a warning at startup if the key is missing, Docker isn't reachable or the computer image hasn't been built; fix those before going further.
+The server downloads the computer image for its version the first time it needs it. If you change anything under `computer/`, or run `main` ahead of the latest release, build it yourself instead: `pnpm computer:build` (a few minutes the first time).
+
+Either way, the server prints a warning at startup if the key is missing or Docker isn't reachable; fix those before going further.
 
 > The server listens on `127.0.0.1` and has no sign-in until you turn it on. That's right for one person on their own machine. Before anyone else can reach it, read [Deployment](deployment.md).
 

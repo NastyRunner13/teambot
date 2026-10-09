@@ -47,6 +47,10 @@ export class FakeComputers implements ComputerProvider {
   async imageReady() {
     return true;
   }
+  imagePulling() {
+    return false;
+  }
+  async pullImage() {}
   async status(agentId: string): Promise<ComputerStatus> {
     return { agentId, state: this.off.has(agentId) ? 'stopped' : 'running' };
   }

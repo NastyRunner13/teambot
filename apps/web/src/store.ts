@@ -463,6 +463,9 @@ function apply(e: EventRecord) {
     if (e.type === 'recording.deleted') next.recordings = s.recordings.filter((x) => x.id !== d.id);
     if (e.type === 'secret.saved' && !s.secrets.includes(d.name)) next.secrets = [...s.secrets, d.name].sort();
     if (e.type === 'secret.deleted') next.secrets = s.secrets.filter((n) => n !== d.name);
+    if (e.type === 'computer.image' && s.health && d.image === s.health.computerImageName) {
+      next.health = { ...s.health, computerImage: d.state === 'ready', computerImagePulling: d.state === 'pulling' };
+    }
     if (e.type.startsWith('connector.') && d.servers && s.health) next.health = { ...s.health, mcpServers: d.servers as McpServerStatus[] };
     if (e.type === 'human.joined' && d.human) next.humans = upsert(s.humans, d.human as Human);
     if (e.type === 'human.removed' && d.human) next.humans = s.humans.filter((h) => h.id !== d.human.id);

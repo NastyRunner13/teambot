@@ -14,6 +14,30 @@ function findRoot(start: string): string {
 
 export const ROOT = findRoot(process.cwd());
 
+/** TeamBot's version, from the root package.json (the release tag matches it). */
+export const VERSION: string = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+
+/** Where releases publish the agent computer image. `pnpm computer:build` tags a local build with the same name. */
+export const COMPUTER_IMAGE_REPO = 'ghcr.io/nastyrunner13/teambot-computer';
+
+/** The computer image this version of the server is made for. */
+export const DEFAULT_COMPUTER_IMAGE = `${COMPUTER_IMAGE_REPO}:${VERSION}`;
+
+/**
+ * Whether the server may download an image itself when it is missing: only ones TeamBot publishes. Any other name
+ * (Docker Hub's teambot/computer, say) could belong to anyone, and a computer's image runs the privileged commands
+ * that set up its firewall.
+ */
+export function isPublishedComputerImage(image: string): boolean {
+  return image.startsWith(`${COMPUTER_IMAGE_REPO}:`) || image.startsWith(`${COMPUTER_IMAGE_REPO}@sha256:`);
+}
+
 export function loadEnvFile() {
   const file = path.join(ROOT, '.env');
   if (fs.existsSync(file)) process.loadEnvFile(file);
@@ -79,7 +103,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     defaultModel: env.TEAMBOT_DEFAULT_MODEL || 'anthropic/claude-sonnet-5.5',
     utilityModel: env.TEAMBOT_UTILITY_MODEL || 'openai/gpt-6-luna',
     reviewerModel: env.TEAMBOT_REVIEWER_MODEL || env.TEAMBOT_UTILITY_MODEL || 'openai/gpt-6-luna',
-    computerImage: env.TEAMBOT_COMPUTER_IMAGE || 'teambot/computer:latest',
+    computerImage: env.TEAMBOT_COMPUTER_IMAGE || DEFAULT_COMPUTER_IMAGE,
     sandboxRuntime: env.TEAMBOT_SANDBOX_RUNTIME ?? '',
     computerNetwork: env.TEAMBOT_COMPUTER_NETWORK ?? '',
     sharedVolume: env.TEAMBOT_SHARED_VOLUME ?? '',

@@ -29,6 +29,8 @@ Start with the guide that matches what you want to do. Every guide is written ag
 
 | Document | What's in it |
 |---|---|
-| [Changelog](../CHANGELOG.md) | What changed, release by release (everything so far is unreleased; the first release will be 0.1.0) |
+| [Changelog](../CHANGELOG.md) | What changed, release by release |
 | [Contributing](../CONTRIBUTING.md) | Setup, the safety invariants every change must keep, conventions, tests, CI and pull requests |
+| [Security policy](../SECURITY.md) | How to report a vulnerability privately, and what counts as one |
+| [Code of conduct](../CODE_OF_CONDUCT.md) | How we treat each other in issues, pull requests and discussions |
 | [CLAUDE.md](../CLAUDE.md) and [AGENTS.md](../AGENTS.md) | Short orientation for coding agents working in this repository (also a useful map for people) |

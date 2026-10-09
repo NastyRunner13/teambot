@@ -711,6 +711,10 @@ export interface Health {
   openrouterKey: boolean;
   docker: boolean;
   computerImage: boolean;
+  /** The image agents' computers start from unless an agent has its own. */
+  computerImageName: string;
+  /** The server is downloading that image. */
+  computerImagePulling: boolean;
   defaultModel: string;
   utilityModel: string;
   reviewerModel: string;

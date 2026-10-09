@@ -72,7 +72,7 @@ We are committed to providing a welcoming, inclusive, and harassment-free enviro
    ```bash
    pnpm computer:build
    ```
-   *(Note: This downloads and builds the Debian desktop container image with Chromium, Xvfb, and computerd).*
+   *(Note: This builds the Debian desktop container image with Chromium, Xvfb, and computerd, tagged with the name the server uses by default (`ghcr.io/nastyrunner13/teambot-computer:<version>`) and `teambot/computer:latest`. Without it, the server downloads the published image for its version, which won't have your changes under `computer/`.)*
 
 5. **Run the development environment:**
    ```bash
@@ -221,7 +221,9 @@ GitHub Actions (`.github/workflows/`) runs on every pull request and every push 
 
 - **CI** (`ci.yml`): `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build` on Node 22. A PR must pass it.
 - **Docker** (`docker.yml`): builds (without pushing) the server image and the agent computer image when the `Dockerfile`, `computer/`, lockfile or workspace files change.
-- **Release** (`release.yml`): pushing a tag like `v0.2.0` runs CI again, checks that the tag matches `version` in `package.json`, and publishes a GitHub Release with the source plus the built web app and a SHA-256 checksum. Tags with a suffix (`v0.2.0-rc.1`) become pre-releases.
+- **Release** (`release.yml`): pushing a tag like `v0.2.0` runs CI again and checks that the tag matches `version` in `package.json`. It then builds both images for amd64 and arm64 on native runners and pushes them to GitHub's registry as `ghcr.io/nastyrunner13/teambot` and `ghcr.io/nastyrunner13/teambot-computer`, tagged `0.2.0`, `0.2` and `latest`. Last, it publishes a GitHub Release with the source plus the built web app, a SHA-256 checksum, and that version's `CHANGELOG.md` section as its notes. Tags with a suffix (`v0.2.0-rc.1`) become pre-releases and don't move `latest`.
+
+The server's default computer image is the one tagged with its own version (`DEFAULT_COMPUTER_IMAGE` in `apps/server/src/config.ts`), and it downloads that image when it's missing, so a server and its computers always come from the same release. It only ever downloads images under `ghcr.io/nastyrunner13/teambot-computer`: any other name could belong to anyone, and a computer's image runs privileged commands for its firewall.
 
 To cut a release: move the entries under **Unreleased** in [`CHANGELOG.md`](CHANGELOG.md) into a new `## [0.2.0] - YYYY-MM-DD` section, bump `version` in `package.json`, merge both, then
 

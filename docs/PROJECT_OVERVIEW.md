@@ -1387,7 +1387,7 @@ Run commands from the repository root with Node 22.13+, pnpm 10, and Docker avai
 
 ```powershell
 pnpm install
-pnpm computer:build
+pnpm computer:build      # optional: otherwise the server downloads the published image for its version
 # First-time setup only; preserve an existing .env.
 Copy-Item .env.example .env
 # Set OPENROUTER_API_KEY in .env using an editor.
@@ -1410,7 +1410,8 @@ Configuration finds the repo root using `pnpm-workspace.yaml`, then loads its `.
 | `TEAMBOT_DEFAULT_MODEL` | `anthropic/claude-sonnet-5.5` for new agents |
 | `TEAMBOT_UTILITY_MODEL` | `openai/gpt-6-luna` for compaction |
 | `TEAMBOT_REVIEWER_MODEL` | Utility model unless explicitly set |
-| `TEAMBOT_COMPUTER_IMAGE` | `teambot/computer:latest` |
+| `TEAMBOT_COMPUTER_IMAGE` | `ghcr.io/nastyrunner13/teambot-computer:<version from package.json>`; downloaded when missing, but only for images under that repository |
+| `TEAMBOT_VERSION` | Docker Compose only: the server image tag, `latest` by default |
 | `TEAMBOT_COMPUTER_MEMORY_MB`, `TEAMBOT_COMPUTER_CPUS` | `2048`, `2` |
 | `TEAMBOT_COMPUTER_IDLE_MINUTES` | `30`; `0` disables idle sleep |
 | `TEAMBOT_SANDBOX_RUNTIME` | Empty uses Docker default; `runsc` when installed/configured |
@@ -1436,15 +1437,15 @@ Model IDs here are local defaults, not a guarantee they remain available from th
 ### Docker Compose deployment
 
 ```powershell
-docker build -t teambot/computer:latest ./computer
-docker compose up -d --build
+docker compose up -d                                  # the released images
+pnpm computer:build; docker compose up -d --build     # or your own build
 ```
 
-The server image builds the web app and runs the TypeScript API. Compose mounts the Docker socket, creates `teambot-data` and `teambot-shared` volumes, and uses a private network called `teambot`. The server listens on `0.0.0.0` inside its container while the host publication stays on `127.0.0.1` by default. `TEAMBOT_PORT` controls the Compose host port.
+Compose runs `ghcr.io/nastyrunner13/teambot:${TEAMBOT_VERSION:-latest}`; with `build: .` beside it, `--build` builds that name from source instead. The server pulls the computer image tagged with its own version on startup if it's missing (`DockerComputers.pullImage`, which emits `computer.image` so the web banner and **Settings → System** show the download). The server image builds the web app and runs the TypeScript API. Compose mounts the Docker socket, creates `teambot-data` and `teambot-shared` volumes, and uses a private network called `teambot`. The server listens on `0.0.0.0` inside its container while the host publication stays on `127.0.0.1` by default. `TEAMBOT_PORT` controls the Compose host port.
 
 For access beyond the local machine, configure HTTPS/reverse proxy, enable team sign-in, and set `TEAMBOT_PUBLIC_URL`. WebSocket and OAuth callback paths must work through the proxy. Self-hosting requires maintaining backups, model credits, integrations, Docker images, and the master key.
 
-Changes under `computer/` need `pnpm computer:build`; rebuilding the web app does not update agent computers. A running old container also needs to stop before replacement on next use.
+Changes under `computer/` need `pnpm computer:build` (it tags the default name, so the local build wins over a download); rebuilding the web app does not update agent computers. A running old container also needs to stop before replacement on next use.
 
 Sources: [environment example](../.env.example), [config](../apps/server/src/config.ts), [scripts](../package.json), [server Dockerfile](../Dockerfile), [Compose](../docker-compose.yml), [starter templates](../apps/web/src/lib/templates.ts).
 
