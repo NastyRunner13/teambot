@@ -18,6 +18,7 @@ export function ComputerFields({
 }) {
   const id = useId();
   const secrets = useStore((s) => s.secrets);
+  const defaultImage = useStore((s) => s.health?.computerImageName) ?? 'the TeamBot computer image';
   const coding = [
     ['Claude Code', ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']],
     ['Codex', ['OPENAI_API_KEY']],
@@ -94,12 +95,12 @@ export function ComputerFields({
         <input
           id={`${id}-image`}
           className="input mono"
-          placeholder="teambot/computer:latest (default)"
+          placeholder={`${defaultImage} (default)`}
           value={computerImage}
           onChange={(e) => set({ computerImage: e.target.value.trim() })}
         />
         <span className="hint">
-          Leave empty for the default. A custom image should be built <span className="mono">FROM teambot/computer:latest</span>. It takes effect the next time the computer
+          Leave empty for the default. A custom image should be built <span className="mono">FROM {defaultImage}</span>. It takes effect the next time the computer
           starts; its files in /home/agent are kept.
         </span>
       </div>

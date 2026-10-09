@@ -1,5 +1,7 @@
 # P0 / P1 implementation review
 
+> **Status: all findings fixed.** This is a historical record of a review held on 2026-10-02, before the first release. Every one of its 14 findings, and three related gaps found while verifying, was fixed the same day with regression tests (see [Status after fixes](#status-after-fixes-2026-10-02)). The limits still open are described in the README's [security model](../README.md#security-model). To report a new problem, see [SECURITY.md](../SECURITY.md).
+
 Reviewed 2026-10-02 against `docs/FEATURE_MAP.md`, the current source, and the existing tests.
 
 **Verdict: most features exist, but P0 and P1 are not yet correctly complete.** There are reproducible defects in isolation, DM privacy, cancellation, crash recovery, budgets, read-only monitoring and calendar triggers. Feature presence and passing happy-path tests are not sufficient to mark these requirements complete.

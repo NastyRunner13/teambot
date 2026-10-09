@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/api.js';
 import type { App } from '../src/app.js';
@@ -123,6 +123,13 @@ describe('calendar routines', () => {
       ['Launch review', '2026-10-07T14:00:00.000Z'],
     ]);
 
+    // Saving a routine checks it at once, at the real time: keep that before the moments below, or the first check
+    // counts as later than they are and nothing is handed over.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-07T13:40:00Z'));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const { app, server } = await setup({ triggers: { fetchText: async (url) => (url === 'https://cal.example.com/private.ics' ? ICS : '') } });
     const lead = addAgent(app, 'Lead');
     const routine = (

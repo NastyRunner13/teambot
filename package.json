@@ -2,7 +2,7 @@
   "name": "teambot",
   "version": "0.1.0",
   "private": true,
-  "description": "An open-source office for AI agents: every agent gets its own computer and model, works with the team in channels and on a task board, and can't act without passing your rules.",
+  "description": "An open-source office for AI agents: every agent gets its own computer and model, works with you and with each other in chats, and can't act without passing your rules.",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@10.30.2",
@@ -15,6 +15,6 @@
     "start": "pnpm --filter @teambot/server start",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
-    "computer:build": "docker build -t teambot/computer:latest computer"
+    "computer:build": "node scripts/build-computer.mjs"
   }
 }

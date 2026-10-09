@@ -1,6 +1,9 @@
 # Self-host TeamBot with Docker:
-#   docker build -t teambot/computer:latest ./computer   # the agent computer image (once, and after updates)
-#   docker compose up -d --build                         # then open http://127.0.0.1:8787
+#   docker compose up -d     # then open http://127.0.0.1:8787
+# This pulls the released server image; the server downloads the agent computer image for its version the first
+# time it needs it. To upgrade: docker compose pull && docker compose up -d. Set TEAMBOT_VERSION (e.g. 0.1.0) in .env
+# to stay on one release.
+# To run your own changes instead: pnpm computer:build && docker compose up -d --build
 #
 # The server talks to Docker through the socket to start one computer per agent. That makes it
 # privileged on this host: only run TeamBot on machines you control, and keep the port on 127.0.0.1
@@ -9,8 +12,8 @@ name: teambot
 
 services:
   teambot:
+    image: ghcr.io/nastyrunner13/teambot:${TEAMBOT_VERSION:-latest}
     build: .
-    image: teambot/server:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:${TEAMBOT_PORT:-8787}:8787"

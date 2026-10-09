@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/NastyRunner13/teambot/security/advisories/new
+    about: Please report security problems privately, not as issues.
+  - name: Questions and ideas
+    url: https://github.com/NastyRunner13/teambot/discussions
+    about: Ask how to do something, show what you built, or talk an idea through.
+  - name: Documentation
+    url: https://github.com/NastyRunner13/teambot/blob/main/docs/README.md
+    about: Guides for getting started, the action policy, routines, connectors, deployment and troubleshooting.

@@ -293,6 +293,8 @@ export async function buildServer(app: App): Promise<FastifyInstance> {
       openrouterKey: !!cfg.openrouterKey,
       docker,
       computerImage: image,
+      computerImageName: cfg.computerImage,
+      computerImagePulling: computers.imagePulling(),
       defaultModel: cfg.defaultModel,
       utilityModel: cfg.utilityModel,
       reviewerModel: cfg.reviewerModel,

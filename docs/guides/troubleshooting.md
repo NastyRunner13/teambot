@@ -57,7 +57,7 @@ Memory files go into the prompt only up to 8,000 characters each. Open the agent
 ### Tool calls fail with Docker or computer errors
 
 - **Docker isn't running.** On Windows and macOS, start Docker Desktop. Restarting the TeamBot server isn't needed. The next tool call tries again.
-- **The image is missing.** Run `pnpm computer:build` (or `docker build -t teambot/computer:latest ./computer`).
+- **The image is missing.** The server downloads its published image when it's missing (**Settings → System** shows **Downloading…**); if that fails, check the server's log and its internet connection. If `TEAMBOT_COMPUTER_IMAGE` names another image, build it: `pnpm computer:build` makes TeamBot's under both its published name and `teambot/computer:latest`.
 - **A custom image is broken.** If the agent has its own base image on its Customize page, check that it was built from TeamBot's image and that the name is right.
 - **The setup script failed.** The Computer tab shows the setup script's status and output. Fix the script; it runs again once it changes.
 

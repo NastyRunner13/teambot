@@ -57,32 +57,27 @@ The interface is dark by default; switch to Light or Auto in **Settings → Gene
 
 ## Quick start
 
-You need **Node 22.13+**, **pnpm 10** and **Docker** (Docker Desktop on Windows/macOS).
+You need **Docker** (Docker Desktop on Windows/macOS) and an [OpenRouter key](https://openrouter.ai/keys).
 
 ```bash
-pnpm install
-pnpm computer:build          # builds the agent computer image (~2 GB, a few minutes the first time)
+git clone https://github.com/NastyRunner13/teambot.git && cd teambot
 cp .env.example .env         # then put your OPENROUTER_API_KEY in .env
-pnpm build                   # builds the web app
-pnpm start                   # → http://127.0.0.1:8787
+docker compose up -d         # → http://127.0.0.1:8787
 ```
+
+The images are published for amd64 and arm64 (Apple silicon too). The server downloads the agent computer image (about 2 GB unpacked) the first time, and a banner shows while it does. Data lives in the `teambot-data` and `teambot-shared` volumes, `TEAMBOT_PORT` changes the port, and `docker compose pull && docker compose up -d` upgrades. To run it for a team on a server (sign-in, HTTPS, backups), read [Deployment](docs/guides/deployment.md).
 
 Click **Create starter team** to add Lead, Researcher and Writer, then try:
 
 > @Lead research the three most popular open-source vector databases and have the Writer turn it into a one-page comparison in /shared
 
-**Development:** `pnpm dev` runs the server on :8787 with reload and Vite on :5173 (open :5173).
+**What it costs:** you pay OpenRouter for the models, nothing else. In real use, a typical job for one agent (message to reply) took 30,000 to 90,000 input tokens, which is about $0.05 to $0.20 on Claude Sonnet 5.5 at list price; long browsing jobs can pass $1. A job like the one above, across three agents, usually stays under a dollar. Smaller models cost a fraction of that, and [budgets](#what-you-get) cap what each agent may spend.
 
 **No key yet?** Set `TEAMBOT_OFFLINE_MODELS=1` in `.env` and every agent answers with a free canned echo, so you can explore the interface. The [getting-started guide](docs/guides/getting-started.md) walks through the first run step by step.
 
-### Self-host with Docker only
+### From source
 
-```bash
-docker build -t teambot/computer:latest ./computer
-docker compose up -d --build   # → http://127.0.0.1:8787  (set TEAMBOT_PORT to change)
-```
-
-Put your settings in `.env` next to `docker-compose.yml`. Data lives in the `teambot-data` and `teambot-shared` volumes. To run it for a team on a server (sign-in, HTTPS, backups, upgrades), read [Deployment](docs/guides/deployment.md).
+With **Node 22.13+** and **pnpm 10**: `pnpm install && pnpm build && pnpm start`. For development, `pnpm dev` runs the server on :8787 with reload and Vite on :5173 (open :5173). If you change `computer/`, build the computer image with `pnpm computer:build`.
 
 ## Documentation
 
@@ -131,7 +126,8 @@ All settings are environment variables (see [.env.example](.env.example)):
 | `TEAMBOT_USER_NAME` | `Owner` | Your name in a new workspace (change it later in **Settings → General**). |
 | `PORT` / `HOST` | `8787` / `127.0.0.1` | |
 | `TEAMBOT_DATA_DIR` | `./data` | SQLite DB, master key, `shared/`, `skills/`, `memory/`. |
-| `TEAMBOT_COMPUTER_IMAGE` | `teambot/computer:latest` | Image for agent computers (an agent can also have its own on its **Customize** page). |
+| `TEAMBOT_COMPUTER_IMAGE` | `ghcr.io/nastyrunner13/teambot-computer:<version>` | Image for agent computers (an agent can also have its own on its **Customize** page). The server downloads TeamBot's published image when it's missing. |
+| `TEAMBOT_VERSION` | `latest` | Docker Compose only: the release to run, e.g. `0.1.0`. |
 | `TEAMBOT_SANDBOX_RUNTIME` | (runc) | Set `runsc` to run computers under gVisor (Linux hosts). |
 | `TEAMBOT_COMPUTER_MEMORY_MB` / `_CPUS` | `2048` / `2` | Per-agent limits. |
 | `TEAMBOT_COMPUTER_IDLE_MINUTES` | `30` | Stop a computer nobody has used for this long (`0` keeps them running). |
@@ -152,7 +148,7 @@ Budgets (per agent on its **Customize** page, and a workspace cap in **Settings*
 
 ## Security model
 
-Be clear-eyed about what this MVP does and doesn't protect against.
+Be clear-eyed about what TeamBot does and doesn't protect against. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 - **Sign-in is off until you turn it on.** A personal workspace has no login and binds to `127.0.0.1`: whoever can open the page acts as you. Before anyone else can reach it, turn on team sign-in in **Settings → Team** and put TeamBot behind HTTPS (a reverse proxy) with `TEAMBOT_PUBLIC_URL` set. Passwords are stored as scrypt hashes, sessions are HttpOnly SameSite cookies, invite links work once, repeated failed sign-ins are paused, and the server refuses changes that a browser says came from another site. The server warns at startup if it listens beyond this machine without sign-in.
 - **Teammates share the agents.** Any member can give any agent work, and agents' work logs are visible to the whole team. Only direct messages between a person and others are private. Members can't change the policy, secrets, connectors, bridges, the workspace spending cap or the team.
@@ -191,7 +187,7 @@ What has changed so far is in the [changelog](CHANGELOG.md). For what's next, se
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup, architectural invariants, coding conventions, and PR guidelines.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup, architectural invariants, coding conventions, and PR guidelines, and follow the [code of conduct](CODE_OF_CONDUCT.md). Questions and ideas go in [Discussions](https://github.com/NastyRunner13/teambot/discussions); security problems go through [private reporting](SECURITY.md), never public issues.
 
 ## License
 

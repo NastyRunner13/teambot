@@ -1,6 +1,6 @@
 import { buildServer } from './api.js';
 import { createApp, startApp, stopApp } from './app.js';
-import { loadConfig, loadEnvFile } from './config.js';
+import { isPublishedComputerImage, loadConfig, loadEnvFile } from './config.js';
 
 loadEnvFile();
 const cfg = loadConfig();
@@ -13,7 +13,15 @@ const health = await app.computers.available();
 console.log(`\n  TeamBot is running at http://${cfg.host}:${cfg.port}\n`);
 if (!cfg.openrouterKey) console.warn('  ! OPENROUTER_API_KEY is not set — agents cannot think until you add it to .env');
 if (!health) console.warn('  ! Docker is not reachable — agents cannot use their computers');
-else if (!(await app.computers.imageReady())) console.warn('  ! The computer image is missing — run: pnpm computer:build');
+else if (!(await app.computers.imageReady())) {
+  if (isPublishedComputerImage(cfg.computerImage)) {
+    console.log(`  Downloading the agent computer image ${cfg.computerImage} (once; it can take a few minutes)…`);
+    app.computers.pullImage().then(
+      () => console.log('  The agent computer image is ready.'),
+      (err) => console.warn(`  ! ${err instanceof Error ? err.message : err}. Build it instead with: pnpm computer:build`),
+    );
+  } else console.warn(`  ! The computer image ${cfg.computerImage} is missing — run: pnpm computer:build`);
+}
 if (!['127.0.0.1', 'localhost', '::1'].includes(cfg.host) && !app.auth.teamMode) {
   console.warn(`  ! Listening on ${cfg.host} without sign-in: anyone who can reach this port controls your agents. Turn on team sign-in in Settings → Team.`);
 }

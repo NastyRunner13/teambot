@@ -3,7 +3,7 @@
 import os from 'node:os';
 import Docker from 'dockerode';
 import type { ComputerStatus } from '@teambot/shared';
-import type { Config } from '../config.js';
+import { isPublishedComputerImage, type Config } from '../config.js';
 import type { Bus } from '../bus.js';
 import type { Vault } from '../vault.js';
 import { errorMessage, sleep } from '../util.js';
@@ -158,6 +158,34 @@ export class DockerComputers implements ComputerProvider {
     return (await this.imageId(image)) !== null;
   }
 
+  /** Downloads in progress, so concurrent callers share one. */
+  private pulls = new Map<string, Promise<void>>();
+
+  imagePulling(image = this.cfg.computerImage): boolean {
+    return this.pulls.has(image);
+  }
+
+  /** Download a missing image TeamBot publishes (never any other name). Resolves once it is there. */
+  pullImage(image = this.cfg.computerImage): Promise<void> {
+    const inFlight = this.pulls.get(image);
+    if (inFlight) return inFlight;
+    const p = (async () => {
+      if (await this.imageReady(image)) return;
+      if (!isPublishedComputerImage(image)) throw new Error(`Computer image ${image} is missing, and TeamBot only downloads the images it publishes.`);
+      this.bus.emit('computer.image', {}, { image, state: 'pulling' });
+      try {
+        const stream: NodeJS.ReadableStream = await this.docker.pull(image);
+        await new Promise<void>((resolve, reject) => this.docker.modem.followProgress(stream, (err) => (err ? reject(err) : resolve())));
+      } catch (err) {
+        this.bus.emit('computer.image', {}, { image, state: 'failed', error: errorMessage(err) });
+        throw new Error(`could not download the computer image ${image}: ${errorMessage(err)}`);
+      }
+      this.bus.emit('computer.image', {}, { image, state: 'ready' });
+    })().finally(() => this.pulls.delete(image));
+    this.pulls.set(image, p);
+    return p;
+  }
+
   private async inspect(agentId: string): Promise<Docker.ContainerInspectInfo | null> {
     try {
       return await this.docker.getContainer(this.name(agentId)).inspect();
@@ -272,11 +300,13 @@ export class DockerComputers implements ComputerProvider {
       }
       if (!info) {
         if (!(await this.imageReady(image))) {
-          throw new Error(
-            image === this.cfg.computerImage
-              ? `Computer image ${image} is missing. Build it with: pnpm computer:build`
-              : `Computer image ${image} is missing. Build or pull it (docker pull ${image}), or clear the agent's custom image.`,
-          );
+          if (isPublishedComputerImage(image)) await this.pullImage(image);
+          else
+            throw new Error(
+              image === this.cfg.computerImage
+                ? `Computer image ${image} is missing. Build it with: pnpm computer:build`
+                : `Computer image ${image} is missing. Build or pull it (docker pull ${image}), or clear the agent's custom image.`,
+            );
         }
         await this.create(agentId, image);
       }

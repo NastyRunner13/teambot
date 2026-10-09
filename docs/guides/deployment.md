@@ -16,19 +16,22 @@ Read the [Security model](../../README.md#security-model) first. The short versi
 ### Docker Compose
 
 ```bash
-docker build -t teambot/computer:latest ./computer   # the agent computer image
-cp .env.example .env                                  # set OPENROUTER_API_KEY and the rest
-docker compose up -d --build                          # → http://127.0.0.1:8787
+cp .env.example .env     # set OPENROUTER_API_KEY and the rest
+docker compose up -d     # → http://127.0.0.1:8787
 ```
+
+This runs the released server image (`ghcr.io/nastyrunner13/teambot`, for amd64 and arm64). The server downloads the matching agent computer image (`ghcr.io/nastyrunner13/teambot-computer:<version>`) the first time it needs it. Set `TEAMBOT_VERSION` in `.env` (e.g. `0.1.0`) to stay on one release instead of the latest. To run your own changes, build both instead: `pnpm computer:build && docker compose up -d --build`.
 
 Compose publishes the port on `127.0.0.1` only (`TEAMBOT_PORT` changes the host port). The server container mounts the Docker socket to start one computer per agent on the private `teambot` network. Computers can't reach the server's API: their firewall blocks it, and the server refuses requests from computer addresses as a second lock.
 
 ### From source
 
 ```bash
-pnpm install && pnpm computer:build && pnpm build
+pnpm install && pnpm build
 pnpm start
 ```
+
+The server downloads the computer image for its version when it's missing. Build it yourself with `pnpm computer:build` if you change `computer/` or run `main` ahead of a release.
 
 To keep it running, use whatever supervises services on your host (systemd, pm2, a Windows service). The server shuts down cleanly on `SIGINT`/`SIGTERM`, and runs in progress are re-queued when it starts again.
 
@@ -128,10 +131,11 @@ Don't set `HOST=0.0.0.0` to skip the proxy. The server warns at startup if it li
    ```bash
    pnpm install
    pnpm build
-   pnpm computer:build      # only if computer/ changed, but harmless otherwise
    ```
 
-   With Compose: `docker build -t teambot/computer:latest ./computer && docker compose up -d --build`.
+   The new version's computer image is downloaded the first time it's needed. If you build your own (`pnpm computer:build`), build it again.
+
+   With Compose: `docker compose pull && docker compose up -d` (with `TEAMBOT_VERSION` set, change it first).
 4. Restart the server. Database migrations run automatically at startup and only ever add to the schema.
 
 **Agent computers keep the image they were started with** until they stop. A stopped computer is recreated from the new image on its next use, and its home volume is kept. Computers stop by themselves after `TEAMBOT_COMPUTER_IDLE_MINUTES` (default 30) without use. You can also **Stop** one from its Computer tab.

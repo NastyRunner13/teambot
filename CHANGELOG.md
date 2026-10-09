@@ -2,11 +2,18 @@
 
 All notable changes to TeamBot are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Until 1.0, a minor version (0.x.0) may include breaking changes; they are called out under **Changed** or **Removed**.
 
-Nothing has been tagged yet. The first release will be **0.1.0**, the version in `package.json`, and will contain everything under [Unreleased](#unreleased).
-
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-10
+
+The first release.
+
 ### Added
+
+#### Install with Docker alone (2026-10-10)
+- Releases publish the server and agent computer images to GitHub's registry for amd64 and arm64 (Apple silicon included): `ghcr.io/nastyrunner13/teambot` and `ghcr.io/nastyrunner13/teambot-computer`. `docker compose up -d` runs TeamBot without building anything, and `TEAMBOT_VERSION` pins a release.
+- The server downloads the computer image for its own version the first time it's needed, with a banner and **Settings → System** showing the download. It never downloads images TeamBot doesn't publish. `pnpm computer:build` tags a local build with the same name, so your own build wins.
+- `SECURITY.md` with private vulnerability reporting, a code of conduct, and issue and pull request templates.
 
 #### Documentation (2026-10-06)
 - Task-oriented guides in `docs/guides/`: getting started, action policy (with tested rule recipes), routines and triggers, skills and memory, connectors and chat apps, pages and components, deployment, and troubleshooting.
@@ -78,6 +85,7 @@ Nothing has been tagged yet. The first release will be **0.1.0**, the version in
 - Agent templates in the new-agent dialog (**Create starter team** still adds Lead, Researcher and Writer).
 
 ### Fixed
+- A calendar routine test depended on the date it ran on and began failing after 2026-10-07.
 - Garbled model output (null bytes) is never posted, and two garbled turns in a row fail the run with advice to pick another model. Replies cut off at the output limit are explained to the model instead of being treated as invalid JSON.
 - Empty final replies get one nudge, then a note, so a run never finishes in silence.
 - Recording keeps working when a browser tab stops answering.
@@ -86,7 +94,9 @@ Nothing has been tagged yet. The first release will be **0.1.0**, the version in
 - From the P0 review: the Routines tab and New task dialog no longer crash, dialogs focus their first field, and partial agent and routine updates no longer reset other fields.
 
 ### Security
+- Docker Compose no longer names `teambot/server` on Docker Hub, a name TeamBot doesn't own; a `docker compose up` without `--build` would have pulled whatever was published there.
 - Recordings drop query values, fragments and token-like path segments from page addresses, so a password sent by a GET form, a `?code=` or an `#access_token=` is never kept. No still is kept of a page whose address carried a stored secret.
 - Tool arguments containing null bytes are refused before anything runs.
 
-[Unreleased]: https://github.com/NastyRunner13/teambot/commits/main
+[Unreleased]: https://github.com/NastyRunner13/teambot/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/NastyRunner13/teambot/releases/tag/v0.1.0
