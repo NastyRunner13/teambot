@@ -709,6 +709,7 @@ export interface McpToolSummary {
 export interface Health {
   ok: boolean;
   openrouterKey: boolean;
+  offlineModels: boolean;
   docker: boolean;
   computerImage: boolean;
   /** The image agents' computers start from unless an agent has its own. */

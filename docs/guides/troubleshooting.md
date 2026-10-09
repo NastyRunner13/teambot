@@ -21,7 +21,7 @@ Check these in order:
 
 - **402 / out of credits:** add credits at openrouter.ai.
 - **Model not found or doesn't support tool calling:** agents need models that support tool calling on OpenRouter. Pick another model on the agent's Customize page.
-- **No key:** set `OPENROUTER_API_KEY` in `.env` and **restart**. The server reads `.env` only at startup, and variables already set in your environment win over `.env`.
+- **No key:** if you want real model replies, set `OPENROUTER_API_KEY` in `.env` and **restart**. When `TEAMBOT_OFFLINE_MODELS=1`, the banner and **Settings → System** say **Offline (echo)** instead; remove that setting and restart to use OpenRouter. The server reads `.env` only at startup, and variables already set in your environment win over `.env`.
 
 ### The agent stopped and said it reached the step limit
 

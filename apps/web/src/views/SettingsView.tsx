@@ -366,9 +366,19 @@ function System() {
       <SettingGroup title="Health">
         <SettingRow
           title="OpenRouter API key"
-          description={health.openrouterKey ? 'Agents think through OpenRouter, with any model per agent.' : <>Add <span className="mono">OPENROUTER_API_KEY</span> to <span className="mono">.env</span> and restart the server.</>}
+          description={
+            health.offlineModels ? (
+              <>Agents use a canned echo. To use real models, set <span className="mono">OPENROUTER_API_KEY</span>, remove <span className="mono">TEAMBOT_OFFLINE_MODELS</span>, and restart the server.</>
+            ) : health.openrouterKey ? (
+              'Agents think through OpenRouter, with any model per agent.'
+            ) : (
+              <>Add <span className="mono">OPENROUTER_API_KEY</span> to <span className="mono">.env</span> and restart the server.</>
+            )
+          }
         >
-          <Status ok={health.openrouterKey}>{health.openrouterKey ? 'Set' : 'Missing'}</Status>
+          <Status ok={health.openrouterKey || health.offlineModels}>
+            {health.offlineModels ? 'Offline (echo)' : health.openrouterKey ? 'Set' : 'Missing'}
+          </Status>
         </SettingRow>
         <SettingRow title="Docker" description={health.docker ? "Each agent's computer is a Docker container." : "Agents can't use their computers. Start Docker Desktop."}>
           <Status ok={health.docker}>{health.docker ? 'Reachable' : 'Not reachable'}</Status>

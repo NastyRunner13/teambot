@@ -1,4 +1,4 @@
-import { AlertTriangle, Menu, X } from 'lucide-react';
+import { AlertTriangle, Info, Menu, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, Redirect, Route, Switch, useLocation } from 'wouter';
 import { FilePreviewDialog } from './components/FilePreview';
@@ -26,21 +26,33 @@ function HealthBanner() {
   }
   if (!health) return null;
   const problems: React.ReactNode[] = [];
-  if (!health.openrouterKey) problems.push(<>No OpenRouter API key yet: add <span className="mono">OPENROUTER_API_KEY</span> to <span className="mono">.env</span> and restart the server.</>);
+  if (!health.offlineModels && !health.openrouterKey) problems.push(<>No OpenRouter API key yet: add <span className="mono">OPENROUTER_API_KEY</span> to <span className="mono">.env</span> and restart the server.</>);
   if (!health.docker) problems.push(<>Docker isn't reachable, so agents can't use their computers. Start Docker Desktop.</>);
   else if (health.computerImagePulling) problems.push(<>Downloading the agent computer image. This happens once and can take a few minutes; agents start work when it's done.</>);
   else if (!health.computerImage) problems.push(<>The agent computer image is missing. Run <span className="mono">pnpm computer:build</span>, or <span className="mono">docker pull {health.computerImageName}</span>.</>);
-  if (!problems.length) return null;
+  if (!problems.length && !health.offlineModels) return null;
   return (
-    <div className="banner">
-      <AlertTriangle size={15} />
-      <div>
-        {problems.map((p, i) => (
-          <div key={i}>{p}</div>
-        ))}
-        <Link href="/settings/system">Check settings</Link>
-      </div>
-    </div>
+    <>
+      {health.offlineModels && (
+        <div className="banner info">
+          <Info size={15} />
+          <div>
+            Offline model mode is on. Agents reply with a canned echo. To use real models, set <span className="mono">OPENROUTER_API_KEY</span>, remove <span className="mono">TEAMBOT_OFFLINE_MODELS</span>, and restart the server.
+          </div>
+        </div>
+      )}
+      {problems.length > 0 && (
+        <div className="banner">
+          <AlertTriangle size={15} />
+          <div>
+            {problems.map((p, i) => (
+              <div key={i}>{p}</div>
+            ))}
+            <Link href="/settings/system">Check settings</Link>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
